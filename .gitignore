@@ -1,0 +1,18 @@
+# React
+Moonlit_Pages/node_modules/
+Moonlit_Pages/dist/
+Moonlit_Pages/.env
+Moonlit_Pages/.env.local
+
+# Laravel
+Moonlit_backend/vendor/
+Moonlit_backend/node_modules/
+Moonlit_backend/.env
+Moonlit_backend/.env.backup
+Moonlit_backend/storage/*.key
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
