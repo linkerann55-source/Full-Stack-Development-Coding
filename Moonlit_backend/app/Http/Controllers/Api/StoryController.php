@@ -5,26 +5,31 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Story;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 
 class StoryController extends Controller
 {
     // Get all published stories
     public function index(Request $request)
     {
-        $stories = Story::with('user:id,name,username')
-            ->withCount(['chapters', 'likes', 'comments'])
-            ->where('status', 'published')
-            ->when($request->search, function ($query, $search) {
-                $query->where(function ($q) use ($search) {
-                    $q->where('title', 'like', "%{$search}%")
-                      ->orWhere('author_name', 'like', "%{$search}%");
-                });
-            })
-            ->when($request->genre, function ($query, $genre) {
-                $query->where('genre', $genre);
-            })
-            ->latest()
-            ->get();
+        $query = Story::with('user')
+            ->where('status', 'published');
+
+        if ($request->filled('search')) {
+            $search = $request->search;
+
+            $query->where(function ($q) use ($search) {
+                $q->where('title', 'like', "%{$search}%")
+                    ->orWhere('author_name', 'like', "%{$search}%")
+                    ->orWhere('author', 'like', "%{$search}%");
+            });
+        }
+
+        if ($request->filled('genre')) {
+            $query->where('genre', $request->genre);
+        }
+
+        $stories = $query->latest()->get();
 
         return response()->json([
             'success' => true,
@@ -32,20 +37,17 @@ class StoryController extends Controller
         ]);
     }
 
-    // Get one published story
-    public function show($storyId)
+    // Get logged-in user's stories
+    public function myStories(Request $request)
     {
-        $story = Story::with([
-            'user:id,name,username',
-            'chapters'
-        ])
-        ->withCount(['likes', 'comments'])
-        ->where('status', 'published')
-        ->findOrFail($storyId);
+        $stories = Story::where('user_id', $request->user()->id)
+            ->with('user')
+            ->latest()
+            ->get();
 
         return response()->json([
             'success' => true,
-            'story' => $story,
+            'stories' => $stories,
         ]);
     }
 
@@ -59,10 +61,13 @@ class StoryController extends Controller
             'genre' => 'nullable|string|max:100',
         ]);
 
+        $user = $request->user();
+
         $story = Story::create([
             ...$validated,
-            'user_id' => $request->user()->id,
-            'author_name' => $request->user()->name,
+            'user_id' => $user->id,
+            'author' => $user->name,
+            'author_name' => $user->name,
             'status' => 'draft',
         ]);
 
@@ -73,25 +78,39 @@ class StoryController extends Controller
         ], 201);
     }
 
-    // Get the logged-in user's stories
-    public function myStories(Request $request)
+    // Get one story
+    public function show($id)
     {
-        $stories = Story::withCount(['chapters', 'likes', 'comments'])
-            ->where('user_id', $request->user()->id)
-            ->latest()
-            ->get();
+        $story = Story::with([
+            'user',
+            'chapters',
+        ])->findOrFail($id);
+
+        $userId = Auth::id();
+
+        if (
+            $story->status !== 'published' &&
+            $story->user_id !== $userId
+        ) {
+            abort(404);
+        }
 
         return response()->json([
             'success' => true,
-            'stories' => $stories,
+            'story' => $story,
         ]);
     }
 
     // Update a story
-    public function update(Request $request, $storyId)
+    public function update(Request $request, $id)
     {
-        $story = Story::where('user_id', $request->user()->id)
-            ->findOrFail($storyId);
+        $story = Story::findOrFail($id);
+
+        abort_unless(
+            $story->user_id === $request->user()->id,
+            403,
+            'You are not allowed to update this story.'
+        );
 
         $validated = $request->validate([
             'title' => 'sometimes|required|string|max:255',
@@ -105,23 +124,39 @@ class StoryController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Story updated successfully!',
-            'story' => $story,
+            'story' => $story->fresh(),
+        ]);
+    }
+
+    // Delete a story
+    public function destroy(Request $request, $id)
+    {
+        $story = Story::findOrFail($id);
+
+        abort_unless(
+            $story->user_id === $request->user()->id,
+            403,
+            'You are not allowed to delete this story.'
+        );
+
+        $story->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Story deleted successfully!',
         ]);
     }
 
     // Publish a story
-    public function publish(Request $request, $storyId)
+    public function publish(Request $request, $id)
     {
-        $story = Story::where('user_id', $request->user()->id)
-            ->withCount('chapters')
-            ->findOrFail($storyId);
+        $story = Story::findOrFail($id);
 
-        if ($story->chapters_count === 0) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Add at least one chapter before publishing.',
-            ], 422);
-        }
+        abort_unless(
+            $story->user_id === $request->user()->id,
+            403,
+            'You are not allowed to publish this story.'
+        );
 
         $story->update([
             'status' => 'published',
@@ -131,15 +166,20 @@ class StoryController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Story published successfully!',
-            'story' => $story,
+            'story' => $story->fresh(),
         ]);
     }
 
     // Unpublish a story
-    public function unpublish(Request $request, $storyId)
+    public function unpublish(Request $request, $id)
     {
-        $story = Story::where('user_id', $request->user()->id)
-            ->findOrFail($storyId);
+        $story = Story::findOrFail($id);
+
+        abort_unless(
+            $story->user_id === $request->user()->id,
+            403,
+            'You are not allowed to unpublish this story.'
+        );
 
         $story->update([
             'status' => 'unpublished',
@@ -148,21 +188,7 @@ class StoryController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Story unpublished successfully!',
-            'story' => $story,
-        ]);
-    }
-
-    // Delete a story
-    public function destroy(Request $request, $storyId)
-    {
-        $story = Story::where('user_id', $request->user()->id)
-            ->findOrFail($storyId);
-
-        $story->delete();
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Story deleted successfully!',
+            'story' => $story->fresh(),
         ]);
     }
 }

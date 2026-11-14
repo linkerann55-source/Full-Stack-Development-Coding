@@ -1,27 +1,43 @@
+
 import { useEffect, useState } from 'react'
 import { Link, useOutletContext } from 'react-router-dom'
+
 import {
   getMyStories,
   createStory,
   updateStory,
   deleteStory,
+  publishStory,
 } from '../api/stories.js'
 
+import {
+  getMyChapters,
+  createChapter,
+  updateChapter,
+} from '../api/chapters.js'
 
 export default function Writer() {
   const { theme } = useOutletContext() || {}
   const isLight = theme !== 'dark'
-  const [drafts, setDrafts] = useState([])
+
+  const [stories, setStories] = useState([])
   const [storyId, setStoryId] = useState(null)
+  const [storyStatus, setStoryStatus] = useState('draft')
+
   const [title, setTitle] = useState('')
   const [genre, setGenre] = useState('Fantasy')
   const [description, setDescription] = useState('')
-  const [content, setContent] = useState('')
   const [coverPhoto, setCoverPhoto] = useState('')
+
+  const [chapters, setChapters] = useState([])
+  const [chapterId, setChapterId] = useState(null)
+  const [chapterTitle, setChapterTitle] = useState('Chapter 1: The Beginning')
+  const [content, setContent] = useState('')
+
   const [allowScreenshots, setAllowScreenshots] = useState(false)
   const [message, setMessage] = useState('')
+  const [saving, setSaving] = useState(false)
 
-  // Match Profile.jsx theme
   const page = isLight ? 'text-[#49372E]' : 'text-[#F5EFFB]'
   const muted = isLight ? 'text-[#88796F]' : 'text-[#B9ADC9]'
 
@@ -51,31 +67,44 @@ export default function Writer() {
     ? 'bg-[#FFF9F1]'
     : 'bg-[#25183D]'
 
-  useEffect(() => {
-    async function loadStories() {
-      try {
-        const data = await getMyStories()
+  const publishedStories = stories.filter(
+    (story) => story.status === 'published'
+  )
 
-        const savedDrafts = data
-          .filter((story) => story.status === 'draft')
-          .map((story) => ({
-            ...story,
-            coverPhoto: story.cover_image || '',
-            allowScreenshots: story.allow_screenshots ?? false,
-            updatedAt: story.updated_at,
-          }))
+  const draftStories = stories.filter(
+    (story) => story.status === 'draft'
+  )
 
-        setDrafts(savedDrafts)
-      } catch (error) {
-        setMessage(
-          error.response?.data?.message ||
-          'Unable to load your stories. Please try again.'
-        )
-      }
+  async function loadStories() {
+    try {
+      const data = await getMyStories()
+      setStories(data.stories || [])
+    } catch (error) {
+      setMessage(
+        error.response?.data?.message ||
+        'Unable to load your stories. Please try again.'
+      )
     }
+  }
 
+  useEffect(() => {
     loadStories()
   }, [])
+
+  function startNewStory() {
+    setStoryId(null)
+    setStoryStatus('draft')
+    setTitle('')
+    setGenre('Fantasy')
+    setDescription('')
+    setCoverPhoto('')
+    setChapters([])
+    setChapterId(null)
+    setChapterTitle('Chapter 1: The Beginning')
+    setContent('')
+    setAllowScreenshots(false)
+    setMessage('')
+  }
 
   function handleCoverUpload(event) {
     const file = event.target.files?.[0]
@@ -101,150 +130,292 @@ export default function Writer() {
     }
 
     reader.onerror = () => {
-      setMessage('Unable to read this image. Please try another one.')
+      setMessage('Unable to read this image.')
     }
 
     reader.readAsDataURL(file)
   }
 
-    async function saveDraft(event) {
-    event.preventDefault()
+  async function loadStory(story) {
+    try {
+      setMessage('')
 
-    if (!title.trim() || !content.trim()) {
-      setMessage('Please enter a story title and story content.')
+      const loadedChapters = await getMyChapters(story.id)
+
+      setStoryId(story.id)
+      setStoryStatus(story.status)
+      setTitle(story.title || '')
+      setGenre(story.genre || 'Fantasy')
+      setDescription(story.description || '')
+      setCoverPhoto(story.cover_image || '')
+      setAllowScreenshots(story.allow_screenshots ?? false)
+      setChapters(loadedChapters)
+
+      const firstChapter = loadedChapters[0]
+
+      setChapterId(firstChapter?.id || null)
+      setChapterTitle(
+        firstChapter?.title || 'Chapter 1: The Beginning'
+      )
+      setContent(firstChapter?.content || '')
+
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    } catch (error) {
+      setMessage('Unable to load this story and its chapters.')
+    }
+  }
+
+  function addNextChapter() {
+    if (!storyId) {
+      setMessage('Please save your story first.')
       return
     }
 
-    const storyData = {
-      title: title.trim(),
-      genre,
-      description: description.trim(),
-      content,
-      cover_image: coverPhoto || null,
-      allow_screenshots: allowScreenshots,
-      status: 'draft',
+    const nextNumber =
+      Math.max(
+        0,
+        ...chapters.map((chapter) =>
+          Number(chapter.chapter_number) || 0
+        )
+      ) + 1
+
+    setChapterId(null)
+    setChapterTitle(`Chapter ${nextNumber}: New Chapter`)
+    setContent('')
+    setMessage('')
+  }
+
+  async function saveDraft(event) {
+    event.preventDefault()
+
+    if (!title.trim() || !chapterTitle.trim() || !content.trim()) {
+      setMessage('Please enter a story title, chapter title and content.')
+      return
     }
 
-    try {
-      let response
+    if (saving) return
+    setSaving(true)
 
-      if (storyId) {
-        response = await updateStory(storyId, storyData)
-        setMessage('Your draft has been updated.')
-      } else {
-        response = await createStory(storyData)
-        setStoryId(response.story.id)
-        setMessage('Your story has been saved as a draft.')
+    try {
+      const storyData = {
+        title: title.trim(),
+        genre,
+        description: description.trim(),
+        cover_image: coverPhoto || null,
       }
 
-      const savedStory = response.story
+      let savedStory
 
-      setDrafts((previous) => [
-        {
-          ...savedStory,
-          coverPhoto: savedStory.cover_image || '',
-          allowScreenshots: savedStory.allow_screenshots ?? false,
-          updatedAt: savedStory.updated_at,
-        },
-        ...previous.filter((draft) => draft.id !== savedStory.id),
-      ])
+      if (storyId) {
+        const response = await updateStory(storyId, storyData)
+        savedStory = response.story
+      } else {
+        const response = await createStory(storyData)
+        savedStory = response.story
+        setStoryId(savedStory.id)
+        setStoryStatus('draft')
+      }
+
+      // New chapters in published stories are published immediately.
+      const chapterStatus =
+        savedStory.status === 'published' ? 'published' : 'draft'
+
+      const chapterData = {
+        title: chapterTitle.trim(),
+        content,
+        status: chapterStatus,
+      }
+
+      if (chapterId) {
+        await updateChapter(chapterId, chapterData)
+      } else {
+        const response = await createChapter(
+          savedStory.id,
+          chapterData
+        )
+
+        setChapterId(response.chapter.id)
+      }
+
+      const updatedChapters = await getMyChapters(savedStory.id)
+      setChapters(updatedChapters)
+
+      await loadStories()
+
+      setMessage(
+        chapterStatus === 'published'
+          ? 'Your new chapter has been published successfully!'
+          : 'Your story and chapter have been saved as a draft.'
+      )
     } catch (error) {
       setMessage(
         error.response?.data?.message ||
-        'Unable to save your draft. Please try again.'
+        'Unable to save your chapter. Please try again.'
       )
+    } finally {
+      setSaving(false)
     }
   }
 
-  function startNewStory() {
-  setStoryId(null)
-  setTitle('')
-  setGenre('Fantasy')
-  setDescription('')
-  setContent('')
-  setCoverPhoto('')
-  setAllowScreenshots(false)
-  setMessage('')
+  async function handlePublish() {
+    if (!title.trim() || !chapterTitle.trim() || !content.trim()) {
+      setMessage('Please enter a story title, chapter title and content.')
+      return
+    }
+
+    if (saving) return
+    setSaving(true)
+
+    try {
+      const storyData = {
+        title: title.trim(),
+        genre,
+        description: description.trim(),
+        cover_image: coverPhoto || null,
+      }
+
+      let savedStory
+
+      if (storyId) {
+        const response = await updateStory(storyId, storyData)
+        savedStory = response.story
+      } else {
+        const response = await createStory(storyData)
+        savedStory = response.story
+      }
+
+      const chapterData = {
+        title: chapterTitle.trim(),
+        content,
+        status: 'published',
+      }
+
+      if (chapterId) {
+        await updateChapter(chapterId, chapterData)
+      } else {
+        await createChapter(savedStory.id, chapterData)
+      }
+
+      if (savedStory.status !== 'published') {
+        await publishStory(savedStory.id)
+      }
+
+      setStoryId(savedStory.id)
+      setStoryStatus('published')
+
+      const updatedChapters = await getMyChapters(savedStory.id)
+      setChapters(updatedChapters)
+
+      await loadStories()
+
+      setChapterId(null)
+
+      const nextNumber =
+        Math.max(
+          0,
+          ...updatedChapters.map((chapter) =>
+            Number(chapter.chapter_number) || 0
+          )
+        ) + 1
+
+      setChapterTitle(`Chapter ${nextNumber}: New Chapter`)
+      setContent('')
+
+      setMessage(
+        'Your chapter has been published successfully! You can add another chapter anytime.'
+      )
+    } catch (error) {
+      setMessage(
+        error.response?.data?.message ||
+        'Unable to publish your chapter. Please try again.'
+      )
+    } finally {
+      setSaving(false)
+    }
   }
 
-  function editDraft(draft) {
-    setStoryId(draft.id)
-    setTitle(draft.title || '')
-    setGenre(draft.genre || 'Fantasy')
-    setDescription(draft.description || '')
-    setContent(draft.content || '')
-    setCoverPhoto(draft.coverPhoto || '')
-    setAllowScreenshots(draft.allowScreenshots ?? false)
-    setMessage('')
-
-    window.scrollTo({ top: 0, behavior: 'smooth' })
-  }
-
-  async function deleteDraft(id) {
-    if (!window.confirm('Delete this draft permanently?')) return
+  async function deleteStoryItem(id) {
+    if (!window.confirm('Delete this story permanently?')) return
 
     try {
       await deleteStory(id)
 
-      setDrafts((previous) =>
-        previous.filter((draft) => draft.id !== id)
+      setStories((previous) =>
+        previous.filter((story) => story.id !== id)
       )
 
       if (storyId === id) {
         startNewStory()
       } else {
-        setMessage('Draft deleted.')
+        setMessage('Story deleted successfully.')
       }
     } catch (error) {
       setMessage(
         error.response?.data?.message ||
-        'Unable to delete this draft. Please try again.'
+        'Unable to delete this story.'
       )
     }
   }
 
-  async function handlePublish() {
-  if (!title.trim() || !content.trim()) {
-    setMessage('Please enter a story title and story content.')
-    return
-  }
-
-  const storyData = {
-    title: title.trim(),
-    genre,
-    description: description.trim(),
-    content,
-    cover_image: coverPhoto || null,
-    allow_screenshots: allowScreenshots,
-    status: 'published',
-  }
-
-  try {
-    if (storyId) {
-      await updateStory(storyId, storyData)
-    } else {
-      await createStory(storyData)
+  function renderStoryList(list, emptyMessage) {
+    if (list.length === 0) {
+      return (
+        <div className={`rounded-xl border border-dashed px-4 py-6 text-center ${border}`}>
+          <p className={`text-sm ${muted}`}>{emptyMessage}</p>
+        </div>
+      )
     }
 
-    setDrafts((previous) =>
-      previous.filter((draft) => draft.id !== storyId)
-    )
+    return (
+      <div className="space-y-3">
+        {list.map((story) => (
+          <div
+            key={story.id}
+            className={`min-w-0 rounded-xl border p-3 ${softPanel}`}
+          >
+            {(story.cover_image || story.coverPhoto) && (
+              <img
+                src={story.cover_image || story.coverPhoto}
+                alt={`${story.title} cover`}
+                className="mb-3 h-28 w-full rounded-lg object-cover"
+              />
+            )}
 
-    startNewStory()
-    setMessage('Your story has been published successfully!')
-  } catch (error) {
-    setMessage(
-      error.response?.data?.message ||
-      'Unable to publish your story. Please try again.'
+            <p className="break-words font-semibold">
+              {story.title}
+            </p>
+
+            <p className={`mt-1 text-xs ${muted}`}>
+              {story.genre} · {story.status}
+            </p>
+
+            <div className="mt-3 flex flex-wrap gap-4">
+              <button
+                type="button"
+                onClick={() => loadStory(story)}
+                className={`text-sm font-semibold ${accent} hover:underline`}
+              >
+                Edit / Manage
+              </button>
+
+              <button
+                type="button"
+                onClick={() => deleteStoryItem(story.id)}
+                className="text-sm font-semibold text-red-500 hover:underline"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
     )
   }
-}
 
   return (
     <main className={`min-h-screen px-4 py-8 sm:px-6 lg:px-10 ${page}`}>
       <div className="mx-auto max-w-7xl">
 
-        {/* Page Header */}
         <header className="mb-8 flex flex-col justify-between gap-5 sm:flex-row sm:items-center">
           <div>
             <p className={`text-xs font-semibold uppercase tracking-[0.25em] ${accent}`}>
@@ -286,28 +457,26 @@ export default function Writer() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h2 className="text-xl font-bold">
-                    {storyId ? 'Edit Your Story' : 'Create a New Story'}
+                    {storyId ? 'Manage Your Story' : 'Create a New Story'}
                   </h2>
 
                   <p className={`mt-2 text-sm ${muted}`}>
-                    Your work is saved securely to your account.
+                    {storyStatus === 'published'
+                      ? 'You can continue adding chapters to this published story.'
+                      : 'Your work is saved securely to your account.'}
                   </p>
                 </div>
 
                 <span className={`shrink-0 rounded-full border px-3 py-1 text-xs font-semibold ${softPanel}`}>
-                  Draft
+                  {storyStatus === 'published' ? 'Published' : 'Draft'}
                 </span>
               </div>
             </div>
 
             <form onSubmit={saveDraft} className="space-y-6 p-5 sm:p-8">
 
-              {/* Story Title */}
               <div>
-                <label
-                  htmlFor="story-title"
-                  className="mb-2 block text-sm font-semibold"
-                >
+                <label htmlFor="story-title" className="mb-2 block text-sm font-semibold">
                   Story Title *
                 </label>
 
@@ -317,17 +486,13 @@ export default function Writer() {
                   onChange={(event) => setTitle(event.target.value)}
                   maxLength={120}
                   placeholder="Give your story a memorable title..."
-                  className={`w-full rounded-xl border px-4 py-3 outline-none transition ${input}`}
+                  className={`w-full rounded-xl border px-4 py-3 outline-none ${input}`}
                   required
                 />
               </div>
 
-              {/* Genre */}
               <div>
-                <label
-                  htmlFor="story-genre"
-                  className="mb-2 block text-sm font-semibold"
-                >
+                <label htmlFor="story-genre" className="mb-2 block text-sm font-semibold">
                   Genre
                 </label>
 
@@ -355,12 +520,8 @@ export default function Writer() {
                 </select>
               </div>
 
-              {/* Description */}
               <div>
-                <label
-                  htmlFor="story-description"
-                  className="mb-2 block text-sm font-semibold"
-                >
+                <label htmlFor="story-description" className="mb-2 block text-sm font-semibold">
                   Short Description
                 </label>
 
@@ -381,11 +542,8 @@ export default function Writer() {
 
               {/* Cover Photo */}
               <div className={`rounded-2xl border p-5 ${softPanel}`}>
-                <label
-                  htmlFor="cover-photo"
-                  className="mb-3 block text-sm font-semibold"
-                >
-                  🖼️ Story Cover Photo
+                <label htmlFor="cover-photo" className="mb-3 block text-sm font-semibold">
+                  Story Cover Photo
                 </label>
 
                 {coverPhoto && (
@@ -401,24 +559,17 @@ export default function Writer() {
                   type="file"
                   accept="image/*"
                   onChange={handleCoverUpload}
-                  className={`block w-full rounded-xl border p-3 text-sm ${
-                    isLight
-                      ? 'border-[#E7D9C9] bg-[#FFFDF9] text-[#49372E] file:mr-3 file:rounded-lg file:border-0 file:bg-[#A66B50] file:px-4 file:py-2 file:font-medium file:text-white'
-                      : 'border-[#49385F] bg-[#170F27] text-[#F5EFFB] file:mr-3 file:rounded-lg file:border-0 file:bg-[#8B6CCF] file:px-4 file:py-2 file:font-medium file:text-white'
-                  }`}
+                  className={`block w-full rounded-xl border p-3 text-sm ${input}`}
                 />
 
                 <p className={`mt-2 text-xs ${muted}`}>
-                  Choose an image from your device. Maximum size: 1 MB.
+                  Maximum size: 1 MB.
                 </p>
 
                 {coverPhoto && (
                   <button
                     type="button"
-                    onClick={() => {
-                      setCoverPhoto('')
-                      setMessage('Cover photo removed.')
-                    }}
+                    onClick={() => setCoverPhoto('')}
                     className="mt-3 text-sm font-medium text-red-500 hover:underline"
                   >
                     Remove Cover Photo
@@ -428,17 +579,12 @@ export default function Writer() {
 
               {/* Screenshot Preference */}
               <div className={`rounded-2xl border p-4 ${softPanel}`}>
-                <label
-                  htmlFor="allow-screenshots"
-                  className="flex cursor-pointer items-start gap-3"
-                >
+                <label htmlFor="allow-screenshots" className="flex cursor-pointer items-start gap-3">
                   <input
                     id="allow-screenshots"
                     type="checkbox"
                     checked={allowScreenshots}
-                    onChange={(event) =>
-                      setAllowScreenshots(event.target.checked)
-                    }
+                    onChange={(event) => setAllowScreenshots(event.target.checked)}
                     className="mt-1 h-4 w-4 shrink-0 accent-violet-500"
                   />
 
@@ -454,21 +600,80 @@ export default function Writer() {
                 </label>
               </div>
 
-              {/* Story Content */}
+              {/* Chapters */}
+              {storyId && (
+                <div className={`rounded-2xl border p-5 ${softPanel}`}>
+                  <div className="mb-4 flex items-center justify-between">
+                    <h3 className="font-bold">Story Chapters</h3>
+
+                    <span className={`text-xs ${muted}`}>
+                      {chapters.length} chapters
+                    </span>
+                  </div>
+
+                  <div className="space-y-2">
+                    {chapters.map((chapter) => (
+                      <button
+                        key={chapter.id}
+                        type="button"
+                        onClick={() => {
+                          setChapterId(chapter.id)
+                          setChapterTitle(chapter.title)
+                          setContent(chapter.content)
+                          setMessage('')
+                        }}
+                        className={`w-full rounded-xl border p-3 text-left ${border} hover:opacity-75`}
+                      >
+                        <p className="font-semibold">
+                          Chapter {chapter.chapter_number}: {chapter.title}
+                        </p>
+
+                        <p className={`mt-1 text-xs ${muted}`}>
+                          {chapter.status}
+                        </p>
+                      </button>
+                    ))}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={addNextChapter}
+                    className={`mt-4 w-full rounded-xl px-4 py-3 font-semibold ${primaryButton}`}
+                  >
+                    + Add Next Chapter
+                  </button>
+                </div>
+              )}
+
+              {/* Chapter Title */}
               <div>
-                <label
-                  htmlFor="story-content"
-                  className="mb-2 block text-sm font-semibold"
-                >
-                  Story Content *
+                <label htmlFor="chapter-title" className="mb-2 block text-sm font-semibold">
+                  Chapter Title *
+                </label>
+
+                <input
+                  id="chapter-title"
+                  value={chapterTitle}
+                  onChange={(event) => setChapterTitle(event.target.value)}
+                  maxLength={255}
+                  placeholder="Enter your chapter title..."
+                  className={`w-full rounded-xl border px-4 py-3 outline-none ${input}`}
+                  required
+                />
+              </div>
+
+              {/* Chapter Content */}
+              <div>
+                <label htmlFor="chapter-content" className="mb-2 block text-sm font-semibold">
+                  Chapter Content *
                 </label>
 
                 <textarea
-                  id="story-content"
+                  id="chapter-content"
                   value={content}
                   onChange={(event) => setContent(event.target.value)}
                   rows={16}
-                  placeholder={'Chapter 1: The Beginning\n\nWrite your story here...'}
+                  placeholder="Start writing your chapter here..."
                   className={`w-full resize-y rounded-xl border px-4 py-4 leading-7 outline-none ${input}`}
                   required
                 />
@@ -476,38 +681,47 @@ export default function Writer() {
                 <p className={`mt-2 text-xs ${muted}`}>
                   {content.trim()
                     ? content.trim().split(/\s+/).length
-                    : 0}{' '}
-                  words
+                    : 0} words
                 </p>
               </div>
 
-              {/* Form Buttons */}
+              {/* Buttons */}
               <div className={`flex flex-wrap gap-3 border-t pt-5 ${border}`}>
                 <button
                   type="submit"
-                  className={`rounded-xl px-5 py-3 text-sm font-semibold transition ${primaryButton}`}
+                  disabled={saving}
+                  className={`rounded-xl px-5 py-3 text-sm font-semibold transition ${primaryButton} disabled:opacity-50`}
                 >
-                  {storyId ? 'Update Draft' : 'Save Draft'}
+                  {saving
+                    ? 'Saving...'
+                    : storyStatus === 'published'
+                      ? 'Publish Chapter'
+                      : storyId
+                        ? 'Update Draft'
+                        : 'Save Draft'}
                 </button>
+
+                {storyStatus !== 'published' && (
+                  <button
+                    type="button"
+                    onClick={handlePublish}
+                    disabled={saving}
+                    className={`rounded-xl border px-5 py-3 text-sm font-semibold transition disabled:opacity-50 ${
+                      isLight
+                        ? 'border-[#E7D9C9] bg-[#EAD2B9] text-[#49372E]'
+                        : 'border-[#49385F] bg-[#49336F] text-[#F5EFFB]'
+                    }`}
+                  >
+                    {saving ? 'Publishing...' : 'Publish Story'}
+                  </button>
+                )}
 
                 <button
                   type="button"
                   onClick={startNewStory}
-                  className={`rounded-xl border px-5 py-3 text-sm font-semibold transition ${border} hover:opacity-75`}
+                  className={`rounded-xl border px-5 py-3 text-sm font-semibold ${border} hover:opacity-75`}
                 >
                   Clear Editor
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handlePublish}
-                  className={`rounded-xl border px-5 py-3 text-sm font-semibold transition ${
-                    isLight
-                      ? 'border-[#E7D9C9] bg-[#EAD2B9] text-[#49372E] hover:bg-[#DFC1A2]'
-                      : 'border-[#49385F] bg-[#49336F] text-[#F5EFFB] hover:bg-[#5B4387]'
-                  }`}
-                >
-                  ✨ Publish Story
                 </button>
               </div>
             </form>
@@ -529,86 +743,44 @@ export default function Writer() {
               </p>
 
               <div className={`mt-5 rounded-xl border p-4 ${softPanel}`}>
+                <p className={`text-sm ${muted}`}>Published Stories</p>
+                <p className={`mt-1 text-3xl font-bold ${accent}`}>
+                  {publishedStories.length}
+                </p>
+              </div>
+
+              <div className={`mt-3 rounded-xl border p-4 ${softPanel}`}>
                 <p className={`text-sm ${muted}`}>Saved Drafts</p>
                 <p className={`mt-1 text-3xl font-bold ${accent}`}>
-                  {drafts.length}
+                  {draftStories.length}
                 </p>
               </div>
             </section>
 
-            {/* Draft List */}
+            {/* Published Stories */}
             <section className={`rounded-2xl border p-5 ${panel}`}>
-              <div className="mb-4 flex items-center justify-between gap-2">
-                <h2 className="text-lg font-bold">My Drafts</h2>
+              <h2 className="mb-4 text-lg font-bold">
+                Published Stories
+              </h2>
 
-                <span className={`text-xs ${muted}`}>
-                  {drafts.length} saved
-                </span>
-              </div>
-
-              {drafts.length === 0 ? (
-                <div className={`rounded-xl border border-dashed px-4 py-8 text-center ${border}`}>
-                  <span className="text-3xl">📖</span>
-
-                  <p className={`mt-3 text-sm ${muted}`}>
-                    Your saved drafts will appear here.
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {drafts.map((draft) => (
-                    <div
-                      key={draft.id}
-                      className={`min-w-0 rounded-xl border p-3 ${softPanel}`}
-                    >
-                      {draft.coverPhoto && (
-                        <img
-                          src={draft.coverPhoto}
-                          alt={`${draft.title} cover`}
-                          className="mb-3 h-28 w-full rounded-lg object-cover"
-                        />
-                      )}
-
-                      <p className="break-words font-semibold">
-                        {draft.title}
-                      </p>
-
-                      <p className={`mt-1 text-xs ${muted}`}>
-                        {draft.genre} ·{' '}
-                        {draft.updatedAt
-                          ? new Date(draft.updatedAt).toLocaleDateString()
-                          : 'Not dated'}
-                      </p>
-
-                      <p className={`mt-2 text-xs ${muted}`}>
-                        Screenshots:{' '}
-                        {draft.allowScreenshots ? 'Allowed' : 'Not allowed'}
-                      </p>
-
-                      <div className="mt-3 flex gap-4">
-                        <button
-                          type="button"
-                          onClick={() => editDraft(draft)}
-                          className={`text-sm font-semibold ${accent} hover:underline`}
-                        >
-                          Edit
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => deleteDraft(draft.id)}
-                          className="text-sm font-semibold text-red-500 hover:underline"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+              {renderStoryList(
+                publishedStories,
+                'Your published stories will appear here.'
               )}
             </section>
 
-            {/* Explore Link */}
+            {/* Drafts */}
+            <section className={`rounded-2xl border p-5 ${panel}`}>
+              <h2 className="mb-4 text-lg font-bold">
+                My Drafts
+              </h2>
+
+              {renderStoryList(
+                draftStories,
+                'Your saved drafts will appear here.'
+              )}
+            </section>
+
             <Link
               to="/explore"
               className={`block rounded-xl border px-4 py-3 text-center text-sm font-semibold transition ${border} hover:opacity-75`}

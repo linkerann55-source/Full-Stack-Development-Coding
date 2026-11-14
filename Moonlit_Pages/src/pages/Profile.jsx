@@ -1,13 +1,28 @@
+
 import { useEffect, useState } from 'react'
 import { Link, useOutletContext } from 'react-router-dom'
 import { getCurrentUser } from '../utils/auth.js'
 import { getFollowers, getFollowing } from '../utils/social.js'
-import { getProfile, updateProfile } from '../api/profile.js'
+import {
+  getProfile,
+  updateProfile,
+  uploadProfilePhotos,
+} from '../api/profile.js'
 import { getMyStories, deleteStory } from '../api/stories.js'
+import {
+  getConversations,
+  createConversation,
+  updateConversation,
+  deleteConversation as deleteConversationAPI,
+  addConversationReply,
+  getPolls,
+  createPoll as createPollAPI,
+  votePoll as votePollAPI,
+  addPollReply as addPollReplyAPI,
+  deletePoll as deletePollAPI,
+} from '../api/community.js'
 
 const PROFILE_KEY = 'moonlit_pages_profile'
-const POSTS_KEY = 'moonlit_pages_profile_posts'
-const POLLS_KEY = 'moonlit_pages_profile_polls'
 
 const defaultProfile = {
   username: 'Moonlight Reader',
@@ -16,6 +31,18 @@ const defaultProfile = {
   avatar: '',
   coverPhoto: '',
 }
+
+const genreOptions = [
+  'Fantasy',
+  'Romance',
+  'Mystery',
+  'Thriller',
+  'Science Fiction',
+  'Horror',
+  'Adventure',
+  'Drama',
+  'Other',
+]
 
 function readJSON(key, fallback) {
   try {
@@ -34,31 +61,75 @@ function saveJSON(key, value) {
   }
 }
 
-function initials(username) {
-  return (username || 'Reader')
+function fixImageUrl(url) {
+  if (!url) return ''
+
+  if (url.startsWith('http://') || url.startsWith('https://')) {
+    return url.replace(
+      'http://localhost/storage/',
+      'http://127.0.0.1:8000/storage/',
+    )
+  }
+
+  return `http://127.0.0.1:8000/storage/${url.replace(/^\/+/, '')}`
+}
+
+function initials(name) {
+  return (name || 'Reader')
     .trim()
     .split(/\s+/)
     .slice(0, 2)
-    .map((word) => word[0]?.toUpperCase() || '')
+    .map((part) => part[0]?.toUpperCase() || '')
     .join('')
 }
 
-function makeId() {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+async function compressAvatar(file) {
+  const image = await createImageBitmap(file)
+  const canvas = document.createElement('canvas')
+  const maxSize = 300
+
+  const scale = Math.min(
+    maxSize / image.width,
+    maxSize / image.height,
+    1,
+  )
+
+  canvas.width = Math.round(image.width * scale)
+  canvas.height = Math.round(image.height * scale)
+
+  const context = canvas.getContext('2d')
+  context.drawImage(image, 0, 0, canvas.width, canvas.height)
+
+  const blob = await new Promise((resolve) => {
+    canvas.toBlob(resolve, 'image/webp', 0.75)
+  })
+
+  image.close()
+
+  if (!blob) return file
+
+  return new File([blob], 'avatar.webp', {
+    type: 'image/webp',
+  })
 }
 
 function Avatar({ src, username, size = 'h-12 w-12' }) {
-  return src ? (
-    <img
-      src={src}
-      alt={`${username}'s avatar`}
-      className={`${size} shrink-0 rounded-full object-cover`}
-    />
-  ) : (
+  return (
     <div
-      className={`${size} flex shrink-0 items-center justify-center rounded-full bg-linear-to-br from-violet-500 to-indigo-700 font-bold text-white`}
+      className={`${size} flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-violet-500 to-indigo-700 font-bold text-white`}
     >
-      {initials(username)}
+      {src ? (
+        <img
+          src={fixImageUrl(src)}
+          alt={`${username || 'User'}'s profile`}
+          loading="eager"
+          decoding="async"
+          fetchPriority="high"
+          className="h-full w-full rounded-full object-cover"
+        />
+      ) : (
+        initials(username)
+      )}
     </div>
   )
 }
@@ -70,13 +141,41 @@ function getStoryList(result) {
   return []
 }
 
+function formatDate(date) {
+  if (!date) return 'Just now'
+
+  const elapsed = Date.now() - new Date(date).getTime()
+
+  if (!Number.isFinite(elapsed) || elapsed < 60000) {
+    return 'Just now'
+  }
+
+  if (elapsed < 3600000) {
+    return `${Math.floor(elapsed / 60000)}m ago`
+  }
+
+  if (elapsed < 86400000) {
+    return `${Math.floor(elapsed / 3600000)}h ago`
+  }
+
+  return new Date(date).toLocaleDateString()
+}
+
+function wasEdited(post) {
+  if (!post.updatedAt || !post.createdAt) return false
+
+  return (
+    new Date(post.updatedAt).getTime() -
+    new Date(post.createdAt).getTime()
+  ) > 1000
+}
+
 export default function Profile() {
   const { theme } = useOutletContext() || {}
-  const isLight = theme === 'light' || theme === 'day'
+  const isDark = theme === 'dark'
+  const isLight = !isDark
 
-  const [user, setUser] = useState(() => {
-    return getCurrentUser() || { username: 'Moonlight Reader' }
-  })
+  const [user, setUser] = useState(() => getCurrentUser() || {})
 
   const [profile, setProfile] = useState(() => ({
     ...defaultProfile,
@@ -96,17 +195,12 @@ export default function Profile() {
 
   const [tab, setTab] = useState('conversations')
   const [editing, setEditing] = useState(false)
-  const [aboutModal, setAboutModal] = useState(false)
   const [savingProfile, setSavingProfile] = useState(false)
   const [message, setMessage] = useState('')
 
-  const [posts, setPosts] = useState(() =>
-    readJSON(POSTS_KEY, []),
-  )
-
-  const [polls, setPolls] = useState(() =>
-    readJSON(POLLS_KEY, []),
-  )
+  const [posts, setPosts] = useState([])
+  const [polls, setPolls] = useState([])
+  const [loadingCommunity, setLoadingCommunity] = useState(true)
 
   const [postText, setPostText] = useState('')
   const [editingPostId, setEditingPostId] = useState(null)
@@ -114,98 +208,110 @@ export default function Profile() {
 
   const [pollQuestion, setPollQuestion] = useState('')
   const [pollOptions, setPollOptions] = useState(['', ''])
+
   const [replyInputs, setReplyInputs] = useState({})
   const [showPollForm, setShowPollForm] = useState(false)
 
-  const page = isLight
-    ? 'text-[#49372E]'
-    : 'text-[#F5EFFB]'
-
-  const muted = isLight
-    ? 'text-[#88796F]'
-    : 'text-[#B9ADC9]'
-
-  const panel = isLight
-    ? 'border-[#D8E7F5] bg-white/90'
-    : 'border-[#3A2D50] bg-[#25183D]/90'
-
-  const border = isLight
-    ? 'border-[#D8E7F5]'
-    : 'border-[#3A2D50]'
-
-  const input = isLight
-    ? 'border-[#D8E7F5] bg-[#F7FBFF] text-[#263B55] placeholder:text-[#91A3B8] focus:border-blue-400'
-    : 'border-[#49385F] bg-[#170F27] text-[#F5EFFB] placeholder:text-[#88799B] focus:border-[#A78BFA]'
-
-  const accent = isLight
-    ? 'text-blue-600'
-    : 'text-[#D6B779]'
-
-  const primaryButton = isLight
-    ? 'bg-blue-600 text-white hover:bg-blue-700'
-    : 'bg-[#8B6CCF] text-white hover:bg-[#7453B5]'
-
-  const softBackground = isLight
-    ? 'bg-white/60'
-    : 'bg-black/20'
-  // Load profile from Laravel
-  async function loadProfile() {
-    try {
-      const currentUser = getCurrentUser()
-      const saved = readJSON(PROFILE_KEY, {})
-
-      const serverProfile = await getProfile()
-
-      const registeredName =
-        serverProfile?.name ||
-        currentUser?.name ||
-        currentUser?.username ||
-        'Moonlight Reader'
-
-      setUser(currentUser || {})
-
-      setProfile({
-        ...defaultProfile,
-        ...saved,
-        username: registeredName,
-        bio: serverProfile?.bio ?? saved?.bio ?? defaultProfile.bio,
-        favoriteGenre:
-          serverProfile?.favorite_genre ||
-          saved?.favoriteGenre ||
-          'Fantasy',
-        avatar: serverProfile?.avatar || '',
-        coverPhoto: serverProfile?.cover_photo || '',
-      })
-
-      try {
-        setFollowingCount(getFollowing().length)
-        setFollowersCount(getFollowers(registeredName).length)
-      } catch {
-        setFollowingCount(0)
-        setFollowersCount(0)
-      }
-    } catch (error) {
-      console.error('Profile loading error:', error)
-
-      const currentUser = getCurrentUser()
-      const saved = readJSON(PROFILE_KEY, {})
-
-      setUser(currentUser || {})
-      setProfile({
-        ...defaultProfile,
-        ...saved,
-        username:
-          currentUser?.name ||
-          currentUser?.username ||
-          saved?.username ||
-          'Moonlight Reader',
-      })
-
-      setMessage('Unable to load the latest profile information.')
-    }
+  const colors = {
+    page: isDark ? 'text-[#F5EFFB]' : 'text-[#49372E]',
+    muted: isDark ? 'text-[#B9ADC9]' : 'text-[#88796F]',
+    accent: isDark ? 'text-[#D6B779]' : 'text-[#A66B50]',
+    border: isDark ? 'border-[#3A2D50]' : 'border-[#E7D9C9]',
+    panel: isDark
+      ? 'border-[#3A2D50] bg-[#25183D]/90'
+      : 'border-[#E7D9C9] bg-[#FFF9F1]/90',
+    input: isDark
+      ? 'border-[#49385F] bg-[#170F27] text-[#F5EFFB] placeholder:text-[#88799B] focus:border-[#A78BFA]'
+      : 'border-[#D8BFA3] bg-white text-[#49372E] placeholder:text-[#A99A8D] focus:border-[#A66B50]',
+    primaryButton: isDark
+      ? 'bg-[#8B6CCF] text-white hover:bg-[#7453B5]'
+      : 'bg-[#A66B50] text-white hover:bg-[#89543F]',
+    secondaryButton: isDark
+      ? 'border-[#594477] text-[#D6B779] hover:bg-[#25183D]'
+      : 'border-[#D8BFA3] text-[#A66B50] hover:bg-[#F0E3D4]',
+    softBackground: isDark ? 'bg-black/20' : 'bg-[#F5EBDD]/70',
+    coverBackground: isDark
+      ? 'bg-gradient-to-r from-[#10091F] via-[#25183D] to-[#39204D]'
+      : 'bg-gradient-to-r from-[#FFF9F1] via-[#F5EBDD] to-[#EAD9C7]',
+    sectionBackground: isDark
+      ? 'border-[#3A2D50] bg-gradient-to-br from-[#25183D] via-[#1A122B] to-[#10091F]'
+      : 'border-[#E7D9C9] bg-gradient-to-br from-[#FFF9F1] via-[#F5EBDD] to-[#EAD9C7]',
   }
 
-  // Load stories written by the logged-in user
+
+async function loadProfile() {
+  const currentUser = getCurrentUser()
+  const saved = readJSON(PROFILE_KEY, {})
+
+  const cachedProfile = {
+    ...defaultProfile,
+    ...saved,
+    username:
+      saved?.username ||
+      currentUser?.username ||
+      currentUser?.name ||
+      defaultProfile.username,
+    avatar: fixImageUrl(saved?.avatar || ''),
+    coverPhoto: fixImageUrl(saved?.coverPhoto || ''),
+  }
+
+  setUser(currentUser || {})
+  setProfile(cachedProfile)
+
+  try {
+    const serverProfile = await getProfile()
+
+    const registeredName =
+      serverProfile?.username ||
+      serverProfile?.name ||
+      cachedProfile.username
+
+    const updatedProfile = {
+      ...cachedProfile,
+      username: registeredName,
+      bio: serverProfile?.bio ?? cachedProfile.bio,
+      favoriteGenre:
+        serverProfile?.favorite_genre ||
+        cachedProfile.favoriteGenre,
+      avatar: fixImageUrl(
+        serverProfile?.avatar || cachedProfile.avatar,
+      ),
+      coverPhoto: fixImageUrl(
+        serverProfile?.cover_photo || cachedProfile.coverPhoto,
+      ),
+    }
+
+    setProfile(updatedProfile)
+    saveJSON(PROFILE_KEY, updatedProfile)
+
+    // Get follower and following counts using the actual user ID
+    const userId =
+      currentUser?.id ||
+      serverProfile?.id ||
+      serverProfile?.user?.id
+
+    if (userId) {
+      const [followers, following] = await Promise.all([
+        getFollowers(userId),
+        getFollowing(userId),
+      ])
+
+      setFollowersCount(
+        Array.isArray(followers) ? followers.length : 0,
+      )
+
+      setFollowingCount(
+        Array.isArray(following) ? following.length : 0,
+      )
+    } else {
+      console.error('User ID not found. Cannot load follow counts.')
+    }
+  } catch (error) {
+    console.error('Profile loading error:', error)
+  }
+}
+
+
   async function loadMyStories() {
     setLoadingStories(true)
 
@@ -220,29 +326,63 @@ export default function Profile() {
     }
   }
 
-  function refreshPosts() {
-    setPosts(readJSON(POSTS_KEY, []))
-    setPolls(readJSON(POLLS_KEY, []))
+  // Load only the logged-in user's conversations and polls
+  async function loadCommunity() {
+    setLoadingCommunity(true)
+
+    try {
+      const serverProfile = await getProfile()
+
+      const username =
+        serverProfile?.username ||
+        serverProfile?.name ||
+        getCurrentUser()?.username ||
+        getCurrentUser()?.name ||
+        profile.username
+
+      const [conversationData, pollData] = await Promise.all([
+        getConversations(username),
+        getPolls(username),
+      ])
+
+      setPosts(Array.isArray(conversationData) ? conversationData : [])
+      setPolls(Array.isArray(pollData) ? pollData : [])
+    } catch (error) {
+      console.error('Community loading error:', error)
+
+      setMessage(
+        error.response?.data?.message ||
+          'Unable to load conversations and polls.',
+      )
+    } finally {
+      setLoadingCommunity(false)
+    }
   }
 
   useEffect(() => {
     loadProfile()
     loadMyStories()
-    refreshPosts()
+    loadCommunity()
 
     const refresh = () => {
       loadProfile()
       loadMyStories()
-      refreshPosts()
+      loadCommunity()
+    }
+
+    const refreshCommunity = () => {
+      loadCommunity()
     }
 
     window.addEventListener('storage', refresh)
+    window.addEventListener('focus', refreshCommunity)
     window.addEventListener('moonlit-auth-updated', refresh)
     window.addEventListener('moonlit-profile-updated', refresh)
     window.addEventListener('moonlit-following-updated', refresh)
 
     return () => {
       window.removeEventListener('storage', refresh)
+      window.removeEventListener('focus', refreshCommunity)
       window.removeEventListener('moonlit-auth-updated', refresh)
       window.removeEventListener('moonlit-profile-updated', refresh)
       window.removeEventListener('moonlit-following-updated', refresh)
@@ -258,10 +398,8 @@ export default function Profile() {
     }))
   }
 
-  // Preview selected image and keep the original file for uploading
-  function handlePhotoUpload(event, field) {
+  async function handlePhotoUpload(event, field) {
     const file = event.target.files?.[0]
-
     if (!file) return
 
     if (!file.type.startsWith('image/')) {
@@ -276,62 +414,73 @@ export default function Profile() {
       return
     }
 
-    const preview = URL.createObjectURL(file)
+    try {
+      const processedFile =
+        field === 'avatar'
+          ? await compressAvatar(file)
+          : file
 
-    setPhotoFiles((current) => ({
-      ...current,
-      [field]: file,
-    }))
+      const preview = URL.createObjectURL(processedFile)
 
-    setProfile((current) => ({
-      ...current,
-      [field]: preview,
-    }))
+      setPhotoFiles((current) => ({
+        ...current,
+        [field]: processedFile,
+      }))
 
-    setMessage('')
+      setProfile((current) => ({
+        ...current,
+        [field]: preview,
+      }))
+
+      setMessage('')
+    } catch {
+      setMessage('Unable to process this image. Please try another.')
+    }
   }
 
-  // Save profile information and photos to Laravel
   async function saveProfile(event) {
     event.preventDefault()
-
     setSavingProfile(true)
     setMessage('')
 
     try {
       const updated = await updateProfile({
+        username: profile.username.trim(),
         bio: profile.bio.trim(),
         favoriteGenre: profile.favoriteGenre.trim(),
-        avatar: photoFiles.avatar,
-        coverPhoto: photoFiles.coverPhoto,
       })
+
+      let uploadedPhotos = {}
+
+      if (photoFiles.avatar || photoFiles.coverPhoto) {
+        uploadedPhotos = await uploadProfilePhotos(photoFiles)
+      }
 
       const nextProfile = {
         ...profile,
-        username: updated.name || profile.username,
-        bio: updated.bio || '',
-        favoriteGenre: updated.favorite_genre || 'Fantasy',
-        avatar: updated.avatar || '',
-        coverPhoto: updated.cover_photo || '',
+        username: updated?.username || profile.username,
+        bio: updated?.bio ?? profile.bio,
+        favoriteGenre:
+          updated?.favorite_genre || profile.favoriteGenre,
+        avatar: fixImageUrl(
+          uploadedPhotos?.avatar ?? profile.avatar,
+        ),
+        coverPhoto: fixImageUrl(
+          uploadedPhotos?.cover_photo ?? profile.coverPhoto,
+        ),
       }
 
       setProfile(nextProfile)
-      setPhotoFiles({
-        avatar: null,
-        coverPhoto: null,
-      })
-
+      setPhotoFiles({ avatar: null, coverPhoto: null })
       saveJSON(PROFILE_KEY, nextProfile)
 
       setUser((current) => ({
         ...current,
-        name: updated.name || current?.name,
-        username: updated.name || current?.username,
+        username: updated?.username || current?.username,
       }))
 
       setEditing(false)
-      setAboutModal(false)
-      setMessage('Profile updated successfully.')
+      setMessage('Profile updated successfully!')
 
       window.dispatchEvent(new Event('moonlit-profile-updated'))
     } catch (error) {
@@ -346,24 +495,16 @@ export default function Profile() {
     }
   }
 
-  // Reset unsaved photo previews
   function cancelProfileEdit() {
-    setPhotoFiles({
-      avatar: null,
-      coverPhoto: null,
-    })
-
+    setPhotoFiles({ avatar: null, coverPhoto: null })
     setEditing(false)
     loadProfile()
   }
 
-  // Delete a story
   async function removeMyStory(storyId) {
-    const confirmed = window.confirm(
-      'Are you sure you want to delete this story?',
-    )
-
-    if (!confirmed) return
+    if (!window.confirm('Are you sure you want to delete this story?')) {
+      return
+    }
 
     try {
       await deleteStory(storyId)
@@ -383,121 +524,126 @@ export default function Profile() {
     }
   }
 
-  // Create a conversation
-  function createPost(event) {
+  async function createPost(event) {
     event.preventDefault()
 
     const text = postText.trim()
     if (!text) return
 
-    const nextPosts = [
-      {
-        id: makeId(),
-        username: profile.username,
-        avatar: profile.avatar || '',
-        text,
-        createdAt: new Date().toISOString(),
-        replies: [],
-      },
-      ...posts,
-    ]
+    try {
+      setMessage('')
 
-    if (!saveJSON(POSTS_KEY, nextPosts)) {
-      setMessage('Could not save your post.')
-      return
+      const newPost = await createConversation(text)
+
+      if (!newPost) {
+        throw new Error('The server did not return the new conversation.')
+      }
+
+      setPosts((current) => [newPost, ...current])
+      setPostText('')
+    } catch (error) {
+      console.error('Create conversation error:', error)
+
+      setMessage(
+        error.response?.data?.message ||
+          'Unable to publish your conversation. Please log in and try again.',
+      )
     }
-
-    setPosts(nextPosts)
-    setPostText('')
-    setMessage('')
   }
 
-  // Edit a conversation
   function startEditPost(post) {
     setEditingPostId(post.id)
     setEditPostText(post.text)
   }
 
-  function saveEditedPost(event, postId) {
+  async function saveEditedPost(event, postId) {
     event.preventDefault()
 
     const text = editPostText.trim()
     if (!text) return
 
-    const nextPosts = posts.map((post) =>
-      post.id === postId
-        ? {
-            ...post,
-            text,
-            updatedAt: new Date().toISOString(),
-          }
-        : post,
-    )
+    try {
+      const updatedPost = await updateConversation(postId, text)
 
-    if (saveJSON(POSTS_KEY, nextPosts)) {
-      setPosts(nextPosts)
+      setPosts((current) =>
+        current.map((post) =>
+          post.id === postId ? updatedPost : post,
+        ),
+      )
+
       setEditingPostId(null)
       setEditPostText('')
+      setMessage('')
+    } catch (error) {
+      console.error('Update conversation error:', error)
+
+      setMessage(
+        error.response?.data?.message ||
+          'Unable to update this conversation.',
+      )
     }
   }
 
-  function deletePost(postId) {
-    const confirmed = window.confirm(
-      'Are you sure you want to delete this conversation?',
-    )
+  async function deletePost(postId) {
+    if (!window.confirm('Are you sure you want to delete this conversation?')) {
+      return
+    }
 
-    if (!confirmed) return
+    try {
+      await deleteConversationAPI(postId)
 
-    const nextPosts = posts.filter((post) => post.id !== postId)
+      setPosts((current) =>
+        current.filter((post) => post.id !== postId),
+      )
 
-    if (saveJSON(POSTS_KEY, nextPosts)) {
-      setPosts(nextPosts)
+      setMessage('')
+    } catch (error) {
+      console.error('Delete conversation error:', error)
+
+      setMessage(
+        error.response?.data?.message ||
+          'Unable to delete this conversation.',
+      )
     }
   }
 
-  // Reply to a conversation
-  function addReply(event, postId) {
+  async function addReply(event, postId) {
     event.preventDefault()
 
     const text = (replyInputs[postId] || '').trim()
     if (!text) return
 
-    const nextPosts = posts.map((post) =>
-      post.id === postId
-        ? {
-            ...post,
-            replies: [
-              ...(post.replies || []),
-              {
-                id: makeId(),
-                username: profile.username,
-                avatar: profile.avatar || '',
-                text,
-                createdAt: new Date().toISOString(),
-              },
-            ],
-          }
-        : post,
-    )
+    try {
+      const updatedPost = await addConversationReply(postId, text)
 
-    if (saveJSON(POSTS_KEY, nextPosts)) {
-      setPosts(nextPosts)
+      setPosts((current) =>
+        current.map((post) =>
+          post.id === postId ? updatedPost : post,
+        ),
+      )
 
       setReplyInputs((current) => ({
         ...current,
         [postId]: '',
       }))
+
+      setMessage('')
+    } catch (error) {
+      console.error('Conversation reply error:', error)
+
+      setMessage(
+        error.response?.data?.message ||
+          'Unable to add your reply.',
+      )
     }
   }
 
-  // Create a poll
-  function createPoll(event) {
+  async function createPoll(event) {
     event.preventDefault()
 
     const question = pollQuestion.trim()
-
     const options = pollOptions
-      .map((option) => option.trim())
+      .map((item) => item.trim())
       .filter(Boolean)
 
     if (!question || options.length < 2) {
@@ -505,127 +651,108 @@ export default function Profile() {
       return
     }
 
-    const nextPolls = [
-      {
-        id: makeId(),
-        username: profile.username,
-        avatar: profile.avatar || '',
-        question,
-        options: options.map((text) => ({
-          id: makeId(),
-          text,
-          votes: [],
-        })),
-        replies: [],
-        createdAt: new Date().toISOString(),
-      },
-      ...polls,
-    ]
+    try {
+      const newPoll = await createPollAPI(question, options)
 
-    if (saveJSON(POLLS_KEY, nextPolls)) {
-      setPolls(nextPolls)
+      if (!newPoll) {
+        throw new Error('The server did not return the new poll.')
+      }
+
+      setPolls((current) => [newPoll, ...current])
       setPollQuestion('')
       setPollOptions(['', ''])
       setShowPollForm(false)
       setMessage('')
       setTab('polls')
+    } catch (error) {
+      console.error('Create poll error:', error)
+
+      setMessage(
+        error.response?.data?.message ||
+          'Unable to publish this poll. Please log in and try again.',
+      )
     }
   }
 
-  // Vote on a poll
-  function votePoll(pollId, optionId) {
-    const nextPolls = polls.map((poll) => {
-      if (poll.id !== pollId) return poll
+  async function votePoll(pollId, optionId) {
+    try {
+      const updatedPoll = await votePollAPI(pollId, optionId)
 
-      const alreadyVoted = poll.options.some((option) =>
-        option.votes.includes(profile.username),
+      setPolls((current) =>
+        current.map((poll) =>
+          poll.id === pollId ? updatedPoll : poll,
+        ),
       )
 
-      if (alreadyVoted) {
-        return {
-          ...poll,
-          options: poll.options.map((option) => ({
-            ...option,
-            votes:
-              option.id === optionId
-                ? option.votes.filter(
-                    (name) => name !== profile.username,
-                  )
-                : option.votes,
-          })),
-        }
-      }
+      setMessage('')
+    } catch (error) {
+      console.error('Poll vote error:', error)
 
-      return {
-        ...poll,
-        options: poll.options.map((option) =>
-          option.id === optionId
-            ? {
-                ...option,
-                votes: [...option.votes, profile.username],
-              }
-            : option,
-        ),
-      }
-    })
-
-    if (saveJSON(POLLS_KEY, nextPolls)) {
-      setPolls(nextPolls)
+      setMessage(
+        error.response?.data?.message ||
+          'Unable to submit your vote.',
+      )
     }
   }
 
-  // Reply to a poll
-  function addPollReply(event, pollId) {
+  async function addPollReply(event, pollId) {
     event.preventDefault()
 
     const text = (replyInputs[pollId] || '').trim()
     if (!text) return
 
-    const nextPolls = polls.map((poll) =>
-      poll.id === pollId
-        ? {
-            ...poll,
-            replies: [
-              ...(poll.replies || []),
-              {
-                id: makeId(),
-                username: profile.username,
-                text,
-                createdAt: new Date().toISOString(),
-              },
-            ],
-          }
-        : poll,
-    )
+    try {
+      const updatedPoll = await addPollReplyAPI(pollId, text)
 
-    if (saveJSON(POLLS_KEY, nextPolls)) {
-      setPolls(nextPolls)
+      setPolls((current) =>
+        current.map((poll) =>
+          poll.id === pollId ? updatedPoll : poll,
+        ),
+      )
 
       setReplyInputs((current) => ({
         ...current,
         [pollId]: '',
       }))
+
+      setMessage('')
+    } catch (error) {
+      console.error('Poll reply error:', error)
+
+      setMessage(
+        error.response?.data?.message ||
+          'Unable to add your poll reply.',
+      )
     }
   }
 
-  function deletePoll(pollId) {
-    const confirmed = window.confirm(
-      'Are you sure you want to delete this poll?',
-    )
+  async function deletePoll(pollId) {
+    if (!window.confirm('Are you sure you want to delete this poll?')) {
+      return
+    }
 
-    if (!confirmed) return
+    try {
+      await deletePollAPI(pollId)
 
-    const nextPolls = polls.filter((poll) => poll.id !== pollId)
+      setPolls((current) =>
+        current.filter((poll) => poll.id !== pollId),
+      )
 
-    if (saveJSON(POLLS_KEY, nextPolls)) {
-      setPolls(nextPolls)
+      setMessage('')
+    } catch (error) {
+      console.error('Delete poll error:', error)
+
+      setMessage(
+        error.response?.data?.message ||
+          'Unable to delete this poll.',
+      )
     }
   }
 
   function updatePollOption(index, value) {
     setPollOptions((current) =>
-      current.map((option, optionIndex) =>
-        optionIndex === index ? value : option,
+      current.map((option, i) =>
+        i === index ? value : option,
       ),
     )
   }
@@ -637,67 +764,44 @@ export default function Profile() {
   }
 
   function removePollOption(index) {
-    if (pollOptions.length <= 2) return
-
-    setPollOptions((current) =>
-      current.filter((_, optionIndex) => optionIndex !== index),
-    )
-  }
-
-  function formatDate(date) {
-    if (!date) return 'Just now'
-
-    const elapsed = Date.now() - new Date(date).getTime()
-
-    if (!Number.isFinite(elapsed) || elapsed < 60000) {
-      return 'Just now'
+    if (pollOptions.length > 2) {
+      setPollOptions((current) =>
+        current.filter((_, i) => i !== index),
+      )
     }
-
-    if (elapsed < 3600000) {
-      return `${Math.floor(elapsed / 60000)}m ago`
-    }
-
-    if (elapsed < 86400000) {
-      return `${Math.floor(elapsed / 3600000)}h ago`
-    }
-
-    return new Date(date).toLocaleDateString()
   }
 
   const tabs = [
-    { id: 'conversations', label: 'Conversations' },
-    { id: 'polls', label: 'Polls' },
-    { id: 'about', label: 'About' },
+    { id: 'stories', label: 'Your Stories' },
+    { id: 'conversations', label: 'Conversation' },
+    { id: 'polls', label: 'Poll' },
   ]
 
-  return (
-      <main className={`min-h-screen px-4 py-8 sm:px-6 lg:px-10 ${page} bg-transparent`}>
-      <div className="mx-auto max-w-5xl">
+  const buttonClass = `rounded-xl px-5 py-3 text-sm font-semibold transition ${colors.primaryButton}`
 
-        {/* Page heading */}
+  const outlineButtonClass = `rounded-xl border px-5 py-3 text-sm font-semibold transition ${colors.border} hover:opacity-80`
+
+  return (
+    <main className={`min-h-screen px-4 py-8 sm:px-6 lg:px-10 ${colors.page}`}>
+      <div className="mx-auto max-w-5xl">
         <div className="mb-7">
-          <p className={`text-xs font-semibold uppercase tracking-[0.25em] ${accent}`}>
+          <p className={`text-xs font-semibold uppercase tracking-[0.25em] ${colors.accent}`}>
             Your personal space
           </p>
-
           <h1 className="mt-2 text-3xl font-bold sm:text-4xl">
             My Profile
           </h1>
         </div>
 
-        {/* Message */}
         {message && (
-          <div className={`mb-5 rounded-xl border px-4 py-3 text-sm ${panel}`}>
+          <div className={`mb-5 rounded-xl border px-4 py-3 text-sm ${colors.panel}`}>
             {message}
           </div>
         )}
 
-        {/* Profile header */}
-        <section className={`overflow-hidden rounded-3xl border ${panel}`}>
-
-          {/* Cover photo */}
+        <section className={`overflow-hidden rounded-3xl border ${colors.panel}`}>
           <div
-            className="h-36 bg-linear-to-r from-indigo-950 via-purple-800 to-[#39204d] bg-cover bg-center sm:h-48"
+            className={`h-36 bg-cover bg-center sm:h-48 ${colors.coverBackground}`}
             style={
               profile.coverPhoto
                 ? { backgroundImage: `url("${profile.coverPhoto}")` }
@@ -706,18 +810,9 @@ export default function Profile() {
           />
 
           <div className="px-5 pb-6 sm:px-8">
-
             <div className="-mt-14 flex flex-col gap-4 sm:-mt-16 sm:flex-row sm:items-end sm:justify-between">
-
               <div className="flex items-end gap-4">
-
-                <div
-                  className={`rounded-full border-4 ${
-                    isLight
-                      ? 'border-white'
-                      : 'border-[#25183D]'
-                  }`}
-                >
+                <div className={`rounded-full border-4 ${isDark ? 'border-[#25183D]' : 'border-[#FFF9F1]'}`}>
                   <Avatar
                     src={profile.avatar}
                     username={profile.username}
@@ -725,16 +820,14 @@ export default function Profile() {
                   />
                 </div>
 
-                <div className="pb-1">
+                <div className="min-w-0 pb-1">
                   <h2 className="text-2xl font-bold sm:text-3xl">
                     {profile.username}
                   </h2>
-
-                  <p className={`mt-1 text-sm ${muted}`}>
+                  <p className={`mt-1 break-all text-sm ${colors.muted}`}>
                     {user?.email || 'Moonlit Pages member'} ✦
                   </p>
                 </div>
-
               </div>
 
               <button
@@ -743,52 +836,45 @@ export default function Profile() {
                   setMessage('')
                   setEditing((current) => !current)
                 }}
-                className={`rounded-xl border px-5 py-3 text-sm font-semibold transition ${border} hover:opacity-80`}
+                className={`rounded-xl border px-5 py-3 text-sm font-semibold transition ${colors.secondaryButton}`}
               >
                 {editing ? 'Close Editor' : '✎ Edit Profile'}
               </button>
-
             </div>
 
             {!editing && (
-              <p className={`mt-5 max-w-2xl whitespace-pre-wrap leading-7 ${muted}`}>
-                {profile.bio || 'This reader has not added a bio yet.'}
-              </p>
+              <>
+                <p className={`mt-5 max-w-2xl whitespace-pre-wrap leading-7 ${colors.muted}`}>
+                  {profile.bio || 'This reader has not added a bio yet.'}
+                </p>
+
+                <p className={`mt-3 text-sm ${colors.accent}`}>
+                  ✦ Favourite genre: {profile.favoriteGenre || 'Not set'}
+                </p>
+              </>
             )}
 
-            {/* Followers */}
             <div className="mt-6 flex flex-wrap gap-6">
-
               <Link to="/followers" className="hover:opacity-75">
                 <span className="font-bold">{followersCount}</span>{' '}
-                <span className={muted}>Followers</span>
+                <span className={colors.muted}>Followers</span>
               </Link>
 
               <Link to="/following" className="hover:opacity-75">
                 <span className="font-bold">{followingCount}</span>{' '}
-                <span className={muted}>Following</span>
+                <span className={colors.muted}>Following</span>
               </Link>
 
               <Link to="/library" className="hover:opacity-75">
                 <span className="font-bold">♡</span>{' '}
-                <span className={muted}>My Library</span>
+                <span className={colors.muted}>My Library</span>
               </Link>
-
             </div>
 
-            {/* Profile editor */}
             {editing && (
-              <form
-                onSubmit={saveProfile}
-                className="mt-7 space-y-6"
-              >
-
-                {/* Avatar upload */}
+              <form onSubmit={saveProfile} className="mt-7 space-y-6">
                 <div>
-                  <label
-                    htmlFor="avatarUpload"
-                    className="mb-3 block text-sm font-semibold"
-                  >
+                  <label className="mb-3 block text-sm font-semibold" htmlFor="avatarUpload">
                     Profile Picture
                   </label>
 
@@ -799,28 +885,31 @@ export default function Profile() {
                       size="h-20 w-20"
                     />
 
-                    <input
-                      id="avatarUpload"
-                      type="file"
-                      accept="image/*"
-                      onChange={(event) =>
-                        handlePhotoUpload(event, 'avatar')
-                      }
-                      className="block w-full min-w-0 flex-1 text-sm"
-                    />
-                  </div>
+                    <div>
+                      <label
+                        htmlFor="avatarUpload"
+                        className={`inline-flex cursor-pointer items-center rounded-xl px-4 py-3 text-sm font-semibold transition ${colors.primaryButton}`}
+                      >
+                        Change Profile Photo
+                      </label>
 
-                  <p className={`mt-2 text-xs ${muted}`}>
-                    Maximum image size: 2 MB.
-                  </p>
+                      <input
+                        id="avatarUpload"
+                        type="file"
+                        accept="image/*"
+                        onChange={(event) => handlePhotoUpload(event, 'avatar')}
+                        className="sr-only"
+                      />
+
+                      <p className={`mt-2 text-xs ${colors.muted}`}>
+                        Image size must be 2 MB or smaller.
+                      </p>
+                    </div>
+                  </div>
                 </div>
 
-                {/* Cover upload */}
-                <div className={`rounded-2xl border p-5 ${softBackground} ${border}`}>
-                  <label
-                    htmlFor="coverUpload"
-                    className="mb-3 block text-sm font-semibold"
-                  >
+                <div className={`rounded-2xl border p-5 ${colors.softBackground} ${colors.border}`}>
+                  <label htmlFor="coverUpload" className="mb-3 block text-sm font-semibold">
                     Cover Photo
                   </label>
 
@@ -832,26 +921,85 @@ export default function Profile() {
                     />
                   )}
 
+                  <label
+                    htmlFor="coverUpload"
+                    className={`inline-flex cursor-pointer items-center rounded-xl px-4 py-3 text-sm font-semibold transition ${colors.primaryButton}`}
+                  >
+                    Change Cover Photo
+                  </label>
+
                   <input
                     id="coverUpload"
                     type="file"
                     accept="image/*"
-                    onChange={(event) =>
-                      handlePhotoUpload(event, 'coverPhoto')
-                    }
-                    className="block w-full text-sm"
+                    onChange={(event) => handlePhotoUpload(event, 'coverPhoto')}
+                    className="sr-only"
                   />
 
-                  <p className={`mt-2 text-xs ${muted}`}>
-                    Maximum image size: 2 MB.
+                  <p className={`mt-2 text-xs ${colors.muted}`}>
+                    Image size must be 2 MB or smaller.
                   </p>
+                </div>
+
+                <div>
+                  <label htmlFor="profileUsername" className="mb-2 block text-sm font-semibold">
+                    Username
+                  </label>
+
+                  <input
+                    id="profileUsername"
+                    name="username"
+                    type="text"
+                    maxLength={50}
+                    required
+                    value={profile.username}
+                    onChange={handleProfileChange}
+                    className={`w-full rounded-xl border px-4 py-3 outline-none ${colors.input}`}
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="profileBio" className="mb-2 block text-sm font-semibold">
+                    About Me
+                  </label>
+
+                  <textarea
+                    id="profileBio"
+                    name="bio"
+                    rows={4}
+                    maxLength={1000}
+                    value={profile.bio}
+                    onChange={handleProfileChange}
+                    placeholder="Tell readers about yourself..."
+                    className={`w-full rounded-xl border px-4 py-3 outline-none ${colors.input}`}
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="profileGenre" className="mb-2 block text-sm font-semibold">
+                    Favourite Genre
+                  </label>
+
+                  <select
+                    id="profileGenre"
+                    name="favoriteGenre"
+                    value={profile.favoriteGenre}
+                    onChange={handleProfileChange}
+                    className={`w-full rounded-xl border px-4 py-3 outline-none ${colors.input}`}
+                  >
+                    {genreOptions.map((genre) => (
+                      <option key={genre} value={genre}>
+                        {genre}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 <div className="flex flex-wrap gap-3">
                   <button
                     type="submit"
                     disabled={savingProfile}
-                    className={`rounded-xl px-6 py-3 font-semibold disabled:opacity-50 ${primaryButton}`}
+                    className={`${buttonClass} disabled:opacity-50`}
                   >
                     {savingProfile ? 'Saving...' : 'Save Profile'}
                   </button>
@@ -859,20 +1007,17 @@ export default function Profile() {
                   <button
                     type="button"
                     onClick={cancelProfileEdit}
-                    className={`rounded-xl border px-6 py-3 font-semibold ${border}`}
+                    className={outlineButtonClass}
                   >
                     Cancel
                   </button>
                 </div>
-
               </form>
             )}
-
           </div>
         </section>
 
-        {/* Tabs */}
-        <nav className={`mt-7 flex flex-wrap gap-2 border-b pb-3 ${border}`}>
+        <nav className={`mt-7 flex flex-wrap gap-2 border-b pb-3 ${colors.border}`}>
           {tabs.map((item) => (
             <button
               key={item.id}
@@ -880,8 +1025,10 @@ export default function Profile() {
               onClick={() => setTab(item.id)}
               className={`rounded-xl px-4 py-3 text-sm font-semibold transition ${
                 tab === item.id
-                  ? primaryButton
-                  : `${muted} hover:opacity-75`
+                  ? `${colors.primaryButton} shadow-md`
+                  : isDark
+                    ? 'bg-[#25183D] text-purple-100 hover:bg-purple-700 hover:text-white'
+                    : 'bg-[#FFF9F1] text-[#49372E] hover:bg-[#F0E3D4] hover:text-[#89543F]'
               }`}
             >
               {item.label}
@@ -889,86 +1036,120 @@ export default function Profile() {
           ))}
         </nav>
 
-        {/* ABOUT TAB */}
-        {tab === 'about' && (
-          <section className={`mt-6 rounded-2xl border p-6 ${panel}`}>
-
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="text-xl font-bold">About Me</h2>
-
-              <button
-                type="button"
-                onClick={() => setAboutModal(true)}
-                className={`rounded-xl px-5 py-3 text-sm font-semibold ${primaryButton}`}
-              >
-                ✎ Edit About
-              </button>
-            </div>
-
-            <div className={`mt-5 rounded-xl border p-4 ${border}`}>
-              <h3 className="font-semibold">Account Information</h3>
-
-              <div className="mt-3 space-y-3 text-sm">
-                <div>
-                  <p className={muted}>Registered name</p>
-                  <p className="font-medium">
-                    {user?.name || user?.username || 'Not available'}
-                  </p>
-                </div>
-
-                <div>
-                  <p className={muted}>Email address</p>
-                  <p className="font-medium">
-                    {user?.email || 'Not available'}
-                  </p>
-                </div>
+        {tab === 'stories' && (
+          <section className={`mt-6 rounded-2xl border p-5 sm:p-6 ${colors.sectionBackground}`}>
+            <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-bold">Your Stories</h2>
+                <p className={`mt-1 text-sm ${colors.muted}`}>
+                  Manage the stories you have written.
+                </p>
               </div>
+
+              <Link to="/writer" className={buttonClass}>
+                + Write a Story
+              </Link>
             </div>
 
-            <div className="mt-5">
-              <p className={`text-sm font-semibold ${muted}`}>
-                About me
+            {loadingStories ? (
+              <p className={`py-8 text-center ${colors.muted}`}>
+                Loading your stories...
               </p>
+            ) : myStories.length === 0 ? (
+              <div className={`rounded-xl border border-dashed p-8 text-center ${colors.border}`}>
+                <div className="text-4xl">📚</div>
+                <h3 className="mt-3 font-bold">
+                  You haven't written any stories yet.
+                </h3>
+                <p className={`mt-2 text-sm ${colors.muted}`}>
+                  Start writing and share your stories with readers.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {myStories.map((story) => (
+                  <article
+                    key={story.id}
+                    className={`relative overflow-visible rounded-xl border ${colors.border}`}
+                  >
+                    <div className="relative">
+                      {story.cover_image || story.coverImage ? (
+                        <img
+                          src={story.cover_image || story.coverImage}
+                          alt={`${story.title} cover`}
+                          className="h-36 w-full rounded-t-xl object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-36 items-center justify-center rounded-t-xl bg-gradient-to-br from-indigo-950 to-purple-800 text-4xl text-white">
+                          ✦
+                        </div>
+                      )}
 
-              <p className="mt-2 whitespace-pre-wrap leading-7">
-                {profile.bio || 'No bio added yet.'}
-              </p>
-            </div>
+                      <details className="absolute right-3 top-3">
+                        <summary className="flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded-full bg-black/70 text-xl text-white hover:bg-black">
+                          ⋮
+                        </summary>
 
-            <div className={`mt-5 rounded-xl border p-4 ${border}`}>
-              <p className={`text-sm ${muted}`}>
-                Favourite genre
-              </p>
+                        <div className="absolute right-0 z-20 mt-2 w-36 overflow-hidden rounded-xl border border-white/10 bg-[#211533] py-1 text-sm text-white shadow-xl">
+                          {String(story.status).toLowerCase() === 'published' && (
+                            <Link
+                              to={`/reader/${story.id}`}
+                              className="block px-4 py-2.5 hover:bg-purple-500/20"
+                            >
+                              Read
+                            </Link>
+                          )}
 
-              <p className="mt-1 font-semibold">
-                ✦ {profile.favoriteGenre || 'Not set'}
-              </p>
-            </div>
+                          <Link
+                            to={`/writer?story=${encodeURIComponent(story.id)}`}
+                            className="block px-4 py-2.5 hover:bg-purple-500/20"
+                          >
+                            Edit
+                          </Link>
 
+                          <button
+                            type="button"
+                            onClick={() => removeMyStory(story.id)}
+                            className="block w-full px-4 py-2.5 text-left text-red-400 hover:bg-red-500/10"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </details>
+                    </div>
+
+                    <div className="p-4">
+                      <h3 className="truncate font-bold">{story.title}</h3>
+
+                      <p className={`mt-1 text-xs ${colors.muted}`}>
+                        {story.genre || 'Uncategorized'} · {story.status || 'Draft'}
+                      </p>
+
+                      <p className={`mt-2 line-clamp-2 text-sm ${colors.muted}`}>
+                        {story.description || 'No description available.'}
+                      </p>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
           </section>
         )}
 
-        {/* CONVERSATIONS TAB */}
         {tab === 'conversations' && (
           <section className="mt-6 space-y-5">
-
-            {/* Create post */}
             <form
               onSubmit={createPost}
-              className={`rounded-2xl border p-5 sm:p-6 ${panel}`}
+              className={`rounded-2xl border p-5 sm:p-6 ${colors.panel}`}
             >
               <div className="flex gap-3">
-
                 <Avatar
                   src={profile.avatar}
                   username={profile.username}
                 />
 
                 <div className="min-w-0 flex-1">
-                  <label
-                    htmlFor="postText"
-                    className="mb-2 block font-semibold"
-                  >
+                  <label htmlFor="postText" className="mb-2 block font-semibold">
                     Start a conversation
                   </label>
 
@@ -977,114 +1158,101 @@ export default function Profile() {
                     rows={3}
                     maxLength={2000}
                     value={postText}
-                    onChange={(event) =>
-                      setPostText(event.target.value)
-                    }
+                    onChange={(event) => setPostText(event.target.value)}
                     placeholder="What's on your mind, reader?"
-                    className={`w-full resize-y rounded-xl border px-4 py-3 outline-none ${input}`}
+                    className={`w-full resize-y rounded-xl border px-4 py-3 outline-none ${colors.input}`}
                   />
 
                   <div className="mt-3 flex justify-end">
                     <button
                       type="submit"
                       disabled={!postText.trim()}
-                      className={`rounded-xl px-5 py-3 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50 ${primaryButton}`}
+                      className={`${buttonClass} disabled:cursor-not-allowed disabled:opacity-50`}
                     >
                       Publish Post
                     </button>
                   </div>
                 </div>
-
               </div>
             </form>
 
-            {posts.length === 0 && (
-              <div className={`rounded-2xl border border-dashed p-10 text-center ${border}`}>
+            {loadingCommunity ? (
+              <div className={`rounded-2xl border p-10 text-center ${colors.panel}`}>
+                <p className={colors.muted}>Loading conversations...</p>
+              </div>
+            ) : posts.length === 0 ? (
+              <div className={`rounded-2xl border border-dashed p-10 text-center ${colors.border}`}>
                 <div className="text-4xl">💬</div>
-
                 <h3 className="mt-3 text-lg font-bold">
                   Start your first conversation
                 </h3>
-
-                <p className={`mt-2 text-sm ${muted}`}>
+                <p className={`mt-2 text-sm ${colors.muted}`}>
                   Share your thoughts about books, writing, or everyday life.
                 </p>
               </div>
-            )}
+            ) : null}
 
-            {/* Posts */}
-            {posts.map((post) => (
+            {!loadingCommunity && posts.map((post) => (
               <article
                 key={post.id}
-                className={`rounded-2xl border p-5 sm:p-6 ${panel}`}
+                className={`rounded-2xl border p-5 sm:p-6 ${colors.panel}`}
               >
                 <div className="flex items-start gap-3">
-
                   <Avatar
                     src={post.avatar}
                     username={post.username}
                   />
 
                   <div className="min-w-0 flex-1">
-
                     <div className="flex flex-wrap items-center justify-between gap-2">
-
                       <div>
-                        <p className="font-semibold">
-                          {post.username}
-                        </p>
+                        <p className="font-semibold">{post.username}</p>
 
-                        <p className={`text-xs ${muted}`}>
+                        <p className={`text-xs ${colors.muted}`}>
                           {formatDate(post.createdAt)}
-                          {post.updatedAt ? ' · Edited' : ''}
+                          {wasEdited(post) ? ' · Edited' : ''}
                         </p>
                       </div>
 
-                  {post.username?.toLowerCase() === profile.username.toLowerCase() && (
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => startEditPost(post)}
-                        className={`rounded-lg border px-3 py-2 text-sm font-semibold ${border} hover:opacity-70`}
-                      >
-                        ✎ Edit
-                      </button>
+                      {post.username?.toLowerCase() === profile.username.toLowerCase() && (
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => startEditPost(post)}
+                            className={`rounded-lg border px-3 py-2 text-sm font-semibold ${colors.border}`}
+                          >
+                            ✎ Edit
+                          </button>
 
-                      <button
-                        type="button"
-                        onClick={() => deletePost(post.id)}
-                        className="rounded-lg border border-red-400 px-3 py-2 text-sm font-semibold text-red-500 hover:bg-red-500/10"
-                      >
-                        🗑 Delete
-                      </button>
+                          <button
+                            type="button"
+                            onClick={() => deletePost(post.id)}
+                            className="rounded-lg border border-red-400 px-3 py-2 text-sm font-semibold text-red-500 hover:bg-red-500/10"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      )}
                     </div>
-                  )}
 
-                    </div>
-
-                    {/* Edit post */}
                     {editingPostId === post.id ? (
                       <form
-                        onSubmit={(event) =>
-                          saveEditedPost(event, post.id)
-                        }
+                        onSubmit={(event) => saveEditedPost(event, post.id)}
                         className="mt-4 space-y-3"
                       >
                         <textarea
                           value={editPostText}
-                          onChange={(event) =>
-                            setEditPostText(event.target.value)
-                          }
+                          onChange={(event) => setEditPostText(event.target.value)}
                           maxLength={2000}
                           rows={4}
-                          className={`w-full rounded-xl border px-4 py-3 outline-none ${input}`}
+                          className={`w-full rounded-xl border px-4 py-3 outline-none ${colors.input}`}
                         />
 
                         <div className="flex gap-2">
                           <button
                             type="submit"
                             disabled={!editPostText.trim()}
-                            className={`rounded-lg px-4 py-2 text-sm ${primaryButton}`}
+                            className={`${buttonClass} disabled:opacity-50`}
                           >
                             Save
                           </button>
@@ -1095,7 +1263,7 @@ export default function Profile() {
                               setEditingPostId(null)
                               setEditPostText('')
                             }}
-                            className={`rounded-lg border px-4 py-2 text-sm ${border}`}
+                            className={outlineButtonClass}
                           >
                             Cancel
                           </button>
@@ -1107,23 +1275,21 @@ export default function Profile() {
                       </p>
                     )}
 
-                    {/* Replies */}
-                    <div className={`mt-5 border-t pt-4 ${border}`}>
-                      <p className={`mb-3 text-sm font-semibold ${muted}`}>
+                    <div className={`mt-5 border-t pt-4 ${colors.border}`}>
+                      <p className={`mb-3 text-sm font-semibold ${colors.muted}`}>
                         Replies ({post.replies?.length || 0})
                       </p>
 
                       <div className="space-y-3">
                         {(post.replies || []).map((reply) => (
                           <div key={reply.id} className="flex gap-2">
-
                             <Avatar
                               src={reply.avatar}
                               username={reply.username}
                               size="h-8 w-8"
                             />
 
-                            <div className={`min-w-0 flex-1 rounded-xl px-3 py-2 ${softBackground}`}>
+                            <div className={`min-w-0 flex-1 rounded-xl px-3 py-2 ${colors.softBackground}`}>
                               <p className="text-sm font-semibold">
                                 {reply.username}
                               </p>
@@ -1132,19 +1298,16 @@ export default function Profile() {
                                 {reply.text}
                               </p>
 
-                              <p className={`mt-1 text-xs ${muted}`}>
+                              <p className={`mt-1 text-xs ${colors.muted}`}>
                                 {formatDate(reply.createdAt)}
                               </p>
                             </div>
-
                           </div>
                         ))}
                       </div>
 
                       <form
-                        onSubmit={(event) =>
-                          addReply(event, post.id)
-                        }
+                        onSubmit={(event) => addReply(event, post.id)}
                         className="mt-4 flex gap-2"
                       >
                         <input
@@ -1157,84 +1320,67 @@ export default function Profile() {
                           }
                           placeholder="Write a reply..."
                           maxLength={500}
-                          className={`min-w-0 flex-1 rounded-xl border px-3 py-2 text-sm outline-none ${input}`}
+                          className={`min-w-0 flex-1 rounded-xl border px-3 py-2 text-sm outline-none ${colors.input}`}
                         />
 
                         <button
                           type="submit"
                           disabled={!(replyInputs[post.id] || '').trim()}
-                          className={`rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50 ${primaryButton}`}
+                          className={`${buttonClass} disabled:opacity-50`}
                         >
                           Reply
                         </button>
                       </form>
-
                     </div>
-
                   </div>
                 </div>
               </article>
             ))}
-
           </section>
         )}
 
-        {/* POLLS TAB */}
         {tab === 'polls' && (
           <section className="mt-6 space-y-5">
-
-            <div className={`flex flex-wrap items-center justify-between gap-3 rounded-2xl border p-5 ${panel}`}>
+            <div className={`flex flex-wrap items-center justify-between gap-3 rounded-2xl border p-5 ${colors.panel}`}>
               <div>
-                <h2 className="text-xl font-bold">
-                  Community Polls
-                </h2>
+                <h2 className="text-xl font-bold">Community Polls</h2>
 
-                <p className={`mt-1 text-sm ${muted}`}>
+                <p className={`mt-1 text-sm ${colors.muted}`}>
                   Ask readers a question and see what they choose.
                 </p>
               </div>
 
               <button
                 type="button"
-                onClick={() =>
-                  setShowPollForm((current) => !current)
-                }
-                className={`rounded-xl px-5 py-3 text-sm font-semibold ${primaryButton}`}
+                onClick={() => setShowPollForm((current) => !current)}
+                className={buttonClass}
               >
                 {showPollForm ? 'Cancel' : '+ Create Poll'}
               </button>
             </div>
 
-            {/* Poll creation form */}
             {showPollForm && (
               <form
                 onSubmit={createPoll}
-                className={`space-y-4 rounded-2xl border p-5 ${panel}`}
+                className={`space-y-4 rounded-2xl border p-5 ${colors.panel}`}
               >
                 <div>
-                  <label
-                    htmlFor="pollQuestion"
-                    className="mb-2 block text-sm font-semibold"
-                  >
+                  <label htmlFor="pollQuestion" className="mb-2 block text-sm font-semibold">
                     Poll question
                   </label>
 
                   <input
                     id="pollQuestion"
                     value={pollQuestion}
-                    onChange={(event) =>
-                      setPollQuestion(event.target.value)
-                    }
+                    onChange={(event) => setPollQuestion(event.target.value)}
                     maxLength={250}
                     placeholder="Which genre do you enjoy most?"
-                    className={`w-full rounded-xl border px-4 py-3 outline-none ${input}`}
+                    className={`w-full rounded-xl border px-4 py-3 outline-none ${colors.input}`}
                   />
                 </div>
 
                 <div className="space-y-3">
-                  <p className="text-sm font-semibold">
-                    Options
-                  </p>
+                  <p className="text-sm font-semibold">Options</p>
 
                   {pollOptions.map((option, index) => (
                     <div key={index} className="flex gap-2">
@@ -1245,14 +1391,14 @@ export default function Profile() {
                         }
                         maxLength={100}
                         placeholder={`Option ${index + 1}`}
-                        className={`min-w-0 flex-1 rounded-xl border px-4 py-3 outline-none ${input}`}
+                        className={`min-w-0 flex-1 rounded-xl border px-4 py-3 outline-none ${colors.input}`}
                       />
 
                       {pollOptions.length > 2 && (
                         <button
                           type="button"
                           onClick={() => removePollOption(index)}
-                          className={`px-3 ${muted}`}
+                          className={`px-3 ${colors.muted}`}
                           aria-label={`Remove option ${index + 1}`}
                         >
                           ✕
@@ -1267,67 +1413,64 @@ export default function Profile() {
                     type="button"
                     onClick={addPollOption}
                     disabled={pollOptions.length >= 6}
-                    className={`rounded-xl border px-4 py-2 text-sm font-semibold disabled:opacity-50 ${border}`}
+                    className={`rounded-xl border px-4 py-2 text-sm font-semibold disabled:opacity-50 ${colors.border}`}
                   >
                     + Add option
                   </button>
 
-                  <button
-                    type="submit"
-                    className={`rounded-xl px-5 py-3 text-sm font-semibold ${primaryButton}`}
-                  >
+                  <button type="submit" className={buttonClass}>
                     Publish Poll
                   </button>
                 </div>
               </form>
             )}
 
-            {polls.length === 0 && (
-              <div className={`rounded-2xl border border-dashed p-10 text-center ${border}`}>
+            {loadingCommunity ? (
+              <div className={`rounded-2xl border p-10 text-center ${colors.panel}`}>
+                <p className={colors.muted}>Loading polls...</p>
+              </div>
+            ) : polls.length === 0 ? (
+              <div className={`rounded-2xl border border-dashed p-10 text-center ${colors.border}`}>
                 <div className="text-4xl">📊</div>
 
-                <h3 className="mt-3 text-lg font-bold">
-                  No polls yet
-                </h3>
+                <h3 className="mt-3 text-lg font-bold">No polls yet</h3>
 
-                <p className={`mt-2 text-sm ${muted}`}>
+                <p className={`mt-2 text-sm ${colors.muted}`}>
                   Create the first poll and invite readers to vote.
                 </p>
               </div>
-            )}
+            ) : null}
 
-            {/* Poll list */}
-            {polls.map((poll) => {
-              const totalVotes = poll.options.reduce(
-                (total, option) => total + option.votes.length,
+            {!loadingCommunity && polls.map((poll) => {
+              const options = poll.options || []
+
+              const totalVotes = options.reduce(
+                (total, option) =>
+                  total + (option.votes || []).length,
                 0,
               )
 
-              const myVote = poll.options.find((option) =>
-                option.votes.includes(profile.username),
+              const myVote = options.find((option) =>
+                (option.votes || []).includes(profile.username),
               )
 
               return (
                 <article
                   key={poll.id}
-                  className={`rounded-2xl border p-5 sm:p-6 ${panel}`}
+                  className={`rounded-2xl border p-5 sm:p-6 ${colors.panel}`}
                 >
                   <div className="flex items-start gap-3">
-
                     <Avatar
                       src={poll.avatar}
                       username={poll.username}
                     />
 
                     <div className="min-w-0 flex-1">
-
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div>
-                          <p className="font-semibold">
-                            {poll.username}
-                          </p>
+                          <p className="font-semibold">{poll.username}</p>
 
-                          <p className={`text-xs ${muted}`}>
+                          <p className={`text-xs ${colors.muted}`}>
                             {formatDate(poll.createdAt)}
                           </p>
                         </div>
@@ -1336,7 +1479,7 @@ export default function Profile() {
                           <button
                             type="button"
                             onClick={() => deletePoll(poll.id)}
-                            className={`text-sm ${muted} hover:text-red-500`}
+                            className="text-sm text-red-500 hover:underline"
                           >
                             Delete
                           </button>
@@ -1347,14 +1490,14 @@ export default function Profile() {
                         {poll.question}
                       </h3>
 
-                      <p className={`mt-1 text-xs ${muted}`}>
+                      <p className={`mt-1 text-xs ${colors.muted}`}>
                         {totalVotes} {totalVotes === 1 ? 'vote' : 'votes'}
                         {myVote ? ' · You voted' : ''}
                       </p>
 
                       <div className="mt-4 space-y-3">
-                        {poll.options.map((option) => {
-                          const votes = option.votes.length
+                        {options.map((option) => {
+                          const votes = (option.votes || []).length
 
                           const percentage = totalVotes
                             ? Math.round((votes / totalVotes) * 100)
@@ -1364,17 +1507,11 @@ export default function Profile() {
                             <button
                               key={option.id}
                               type="button"
-                              onClick={() =>
-                                votePoll(poll.id, option.id)
-                              }
-                              className={`relative w-full overflow-hidden rounded-xl border p-3 text-left transition ${border} hover:opacity-80`}
+                              onClick={() => votePoll(poll.id, option.id)}
+                              className={`relative w-full overflow-hidden rounded-xl border p-3 text-left transition ${colors.border} hover:opacity-80`}
                             >
                               <span
-                                className={`absolute inset-y-0 left-0 ${
-                                  isLight
-                                    ? 'bg-blue-100'
-                                    : 'bg-[#49336F]'
-                                }`}
+                                className={`absolute inset-y-0 left-0 ${isDark ? 'bg-[#49336F]' : 'bg-[#EAD9C7]'}`}
                                 style={{ width: `${percentage}%` }}
                               />
 
@@ -1392,13 +1529,12 @@ export default function Profile() {
                         })}
                       </div>
 
-                      <p className={`mt-2 text-xs ${muted}`}>
+                      <p className={`mt-2 text-xs ${colors.muted}`}>
                         Select an option to vote. Select again to remove your vote.
                       </p>
 
-                      {/* Poll replies */}
-                      <div className={`mt-5 border-t pt-4 ${border}`}>
-                        <p className={`mb-3 text-sm font-semibold ${muted}`}>
+                      <div className={`mt-5 border-t pt-4 ${colors.border}`}>
+                        <p className={`mb-3 text-sm font-semibold ${colors.muted}`}>
                           Replies ({poll.replies?.length || 0})
                         </p>
 
@@ -1406,7 +1542,7 @@ export default function Profile() {
                           {(poll.replies || []).map((reply) => (
                             <div
                               key={reply.id}
-                              className={`rounded-xl px-3 py-2 ${softBackground}`}
+                              className={`rounded-xl px-3 py-2 ${colors.softBackground}`}
                             >
                               <p className="text-sm font-semibold">
                                 {reply.username}
@@ -1416,7 +1552,7 @@ export default function Profile() {
                                 {reply.text}
                               </p>
 
-                              <p className={`mt-1 text-xs ${muted}`}>
+                              <p className={`mt-1 text-xs ${colors.muted}`}>
                                 {formatDate(reply.createdAt)}
                               </p>
                             </div>
@@ -1424,9 +1560,7 @@ export default function Profile() {
                         </div>
 
                         <form
-                          onSubmit={(event) =>
-                            addPollReply(event, poll.id)
-                          }
+                          onSubmit={(event) => addPollReply(event, poll.id)}
                           className="mt-4 flex gap-2"
                         >
                           <input
@@ -1439,263 +1573,26 @@ export default function Profile() {
                             }
                             placeholder="Reply to this poll..."
                             maxLength={500}
-                            className={`min-w-0 flex-1 rounded-xl border px-3 py-2 text-sm outline-none ${input}`}
+                            className={`min-w-0 flex-1 rounded-xl border px-3 py-2 text-sm outline-none ${colors.input}`}
                           />
 
                           <button
                             type="submit"
                             disabled={!(replyInputs[poll.id] || '').trim()}
-                            className={`rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50 ${primaryButton}`}
+                            className={`${buttonClass} disabled:opacity-50`}
                           >
                             Reply
                           </button>
                         </form>
-
                       </div>
-
                     </div>
                   </div>
                 </article>
               )
             })}
-
           </section>
         )}
-
-        {/* YOUR STORIES */}
-        <section className={`mt-10 rounded-2xl border p-5 sm:p-6 ${panel}`}>
-
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-xl font-bold">
-                Your Stories
-              </h2>
-
-              <p className={`mt-2 text-sm ${muted}`}>
-                Manage the stories you have written.
-              </p>
-            </div>
-
-            <Link
-              to="/writer"
-              className={`rounded-xl px-5 py-3 text-sm font-semibold ${primaryButton}`}
-            >
-              + Write a Story
-            </Link>
-          </div>
-
-          {loadingStories ? (
-            <p className={`mt-6 text-center ${muted}`}>
-              Loading your stories...
-            </p>
-          ) : myStories.length === 0 ? (
-            <div className={`mt-6 rounded-xl border border-dashed p-8 text-center ${border}`}>
-              <div className="text-4xl">📚</div>
-
-              <h3 className="mt-3 font-bold">
-                You haven't written any stories yet.
-              </h3>
-
-              <p className={`mt-2 text-sm ${muted}`}>
-                Start writing and share your stories with readers.
-              </p>
-            </div>
-          ) : (
-            <div className="mt-6 grid gap-4 sm:grid-cols-2">
-
-              {myStories.map((story) => (
-                <article
-                  key={story.id}
-                  className={`overflow-hidden rounded-xl border ${border}`}
-                >
-
-                  {story.cover_image || story.coverImage ? (
-                    <img
-                      src={story.cover_image || story.coverImage}
-                      alt={story.title}
-                      className="h-40 w-full object-cover"
-                    />
-                  ) : (
-                    <div className="flex h-40 items-center justify-center bg-linear-to-br from-indigo-950 to-purple-800 text-4xl text-white">
-                      ✦
-                    </div>
-                  )}
-
-                  <div className="p-4">
-
-                    <h3 className="font-bold">
-                      {story.title}
-                    </h3>
-
-                    <p className={`mt-1 text-sm ${muted}`}>
-                      {story.genre || 'Uncategorized'}
-                      {' · '}
-                      {story.status || 'Draft'}
-                    </p>
-
-                    <p className={`mt-2 line-clamp-2 text-sm ${muted}`}>
-                      {story.description || 'No description available.'}
-                    </p>
-
-                    <div className="mt-4 flex flex-wrap gap-2">
-
-                      {story.status === 'published' && (
-                        <Link
-                          to={`/reader/${story.id}`}
-                          className={`rounded-lg px-3 py-2 text-sm ${primaryButton}`}
-                        >
-                          Read
-                        </Link>
-                      )}
-
-                      <Link
-                        to="/writer"
-                        className={`rounded-lg border px-3 py-2 text-sm ${border}`}
-                      >
-                        Manage
-                      </Link>
-
-                      <button
-                        type="button"
-                        onClick={() => removeMyStory(story.id)}
-                        className="rounded-lg border border-red-400 px-3 py-2 text-sm text-red-500 hover:bg-red-500/10"
-                      >
-                        Delete
-                      </button>
-
-                    </div>
-
-                  </div>
-                </article>
-              ))}
-
-            </div>
-          )}
-
-        </section>
-
       </div>
-
-      {/* ABOUT EDIT POPUP */}
-      {aboutModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) {
-              setAboutModal(false)
-            }
-          }}
-        >
-          <div className={`max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border p-6 shadow-2xl ${panel}`}>
-
-            <div className="flex items-center justify-between">
-              <div>
-                <p className={`text-xs font-semibold uppercase tracking-widest ${accent}`}>
-                  Personal information
-                </p>
-
-                <h2 className="mt-1 text-xl font-bold">
-                  Edit About Me
-                </h2>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setAboutModal(false)}
-                className={`rounded-lg px-3 py-2 text-xl ${muted}`}
-                aria-label="Close popup"
-              >
-                ✕
-              </button>
-            </div>
-
-            <form
-              onSubmit={saveProfile}
-              className="mt-6 space-y-5"
-            >
-
-              <div>
-                <label
-                  htmlFor="aboutBio"
-                  className="mb-2 block text-sm font-semibold"
-                >
-                  About me
-                </label>
-
-                <textarea
-                  id="aboutBio"
-                  name="bio"
-                  rows={4}
-                  maxLength={1000}
-                  value={profile.bio}
-                  onChange={handleProfileChange}
-                  placeholder="Tell readers about yourself..."
-                  className={`w-full rounded-xl border px-4 py-3 outline-none ${input}`}
-                />
-              </div>
-
-              <div>
-                <label
-                  htmlFor="aboutGenre"
-                  className="mb-2 block text-sm font-semibold"
-                >
-                  Favourite genre
-                </label>
-
-                <select
-                  id="aboutGenre"
-                  name="favoriteGenre"
-                  value={profile.favoriteGenre}
-                  onChange={handleProfileChange}
-                  className={`w-full rounded-xl border px-4 py-3 outline-none ${input}`}
-                >
-                  {[
-                    'Fantasy',
-                    'Romance',
-                    'Mystery',
-                    'Thriller',
-                    'Science Fiction',
-                    'Horror',
-                    'Adventure',
-                    'Drama',
-                    'Other',
-                  ].map((genre) => (
-                    <option key={genre} value={genre}>
-                      {genre}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="flex justify-end gap-3 pt-2">
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAboutModal(false)
-                    loadProfile()
-                  }}
-                  className={`rounded-xl border px-5 py-3 text-sm font-semibold ${border}`}
-                >
-                  Cancel
-                </button>
-
-                <button
-                  type="submit"
-                  disabled={savingProfile}
-                  className={`rounded-xl px-5 py-3 text-sm font-semibold disabled:opacity-50 ${primaryButton}`}
-                >
-                  {savingProfile ? 'Saving...' : 'Save Changes'}
-                </button>
-
-              </div>
-
-            </form>
-
-          </div>
-        </div>
-      )}
-
     </main>
   )
 }

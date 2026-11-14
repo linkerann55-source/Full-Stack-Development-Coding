@@ -34,3 +34,8 @@ export const getStory = async (id) => {
   const response = await api.get(`/stories/${id}`)
   return response.data
 }
+
+export const publishStory = async (id) => {
+  const response = await api.post(`/stories/${id}/publish`)
+  return response.data
+}

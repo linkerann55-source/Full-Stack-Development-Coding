@@ -1,11 +1,12 @@
+
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useOutletContext } from 'react-router-dom'
 import {
   getNotifications,
   markNotificationAsRead,
   markAllNotificationsAsRead,
+  deleteNotification,
   clearNotifications,
-  saveNotifications,
   subscribeToNotifications,
 } from '../utils/notifications.js'
 
@@ -13,7 +14,55 @@ const notificationIcons = {
   like: '💜',
   comment: '💬',
   follow: '🌙',
+  reply: '↩️',
   activity: '🔔',
+}
+
+const API_ORIGIN = 'http://127.0.0.1:8000'
+
+function getAvatarUrl(avatar) {
+  if (!avatar || typeof avatar !== 'string') return null
+
+  if (avatar.startsWith('data:image/')) {
+    return avatar
+  }
+
+  let path = avatar
+
+  // Fix URLs generated with localhost or an incorrect port
+  if (/^https?:\/\//i.test(avatar)) {
+    try {
+      const parsedUrl = new URL(avatar)
+
+      if (
+        parsedUrl.hostname === 'localhost' ||
+        parsedUrl.hostname === '127.0.0.1'
+      ) {
+        path = parsedUrl.pathname
+      } else {
+        return avatar
+      }
+    } catch {
+      return null
+    }
+  }
+
+  path = path.replace(/^\/+/, '')
+
+  // Ignore emoji or other non-image avatar values
+  if (!/\.(png|jpe?g|webp|gif)$/i.test(path)) {
+    return null
+  }
+
+  if (path.startsWith('storage/')) {
+    return `${API_ORIGIN}/${path}`
+  }
+
+  if (path.startsWith('avatars/')) {
+    return `${API_ORIGIN}/storage/${path}`
+  }
+
+  return `${API_ORIGIN}/storage/${path}`
 }
 
 export default function Notifications() {
@@ -22,30 +71,18 @@ export default function Notifications() {
 
   const [notifications, setNotifications] = useState([])
   const [filter, setFilter] = useState('all')
-  const [showClearConfirmation, setShowClearConfirmation] =
-    useState(false)
+  const [showClearConfirmation, setShowClearConfirmation] = useState(false)
+  const [loading, setLoading] = useState(true)
 
-  // Home page matching colour palette
   const colors = {
     page: isDark
       ? 'bg-[#10091F] text-[#F5EFFB]'
       : 'bg-[#F5EBDD] text-[#49372E]',
 
-    heading: isDark
-      ? 'text-[#F5EFFB]'
-      : 'text-[#49372E]',
-
-    muted: isDark
-      ? 'text-[#B9ADC9]'
-      : 'text-[#88796F]',
-
-    accent: isDark
-      ? 'text-[#D6B779]'
-      : 'text-[#A66B50]',
-
-    border: isDark
-      ? 'border-[#3A2D50]'
-      : 'border-[#E7D9C9]',
+    heading: isDark ? 'text-[#F5EFFB]' : 'text-[#49372E]',
+    muted: isDark ? 'text-[#B9ADC9]' : 'text-[#88796F]',
+    accent: isDark ? 'text-[#D6B779]' : 'text-[#A66B50]',
+    border: isDark ? 'border-[#3A2D50]' : 'border-[#E7D9C9]',
 
     panel: isDark
       ? 'border-[#3A2D50] bg-[#25183D]'
@@ -72,8 +109,17 @@ export default function Notifications() {
       : 'border-[#E7D9C9] bg-gradient-to-br from-[#FFF9F1] via-[#F5EBDD] to-[#EAD9C7]',
   }
 
-  const loadNotifications = useCallback(() => {
-    setNotifications(getNotifications())
+  // Load notifications from Laravel
+  const loadNotifications = useCallback(async () => {
+    try {
+      const data = await getNotifications()
+      setNotifications(Array.isArray(data) ? data : [])
+    } catch (error) {
+      console.error('Failed to load notifications:', error)
+      setNotifications([])
+    } finally {
+      setLoading(false)
+    }
   }, [])
 
   useEffect(() => {
@@ -81,16 +127,11 @@ export default function Notifications() {
 
     const unsubscribe = subscribeToNotifications(loadNotifications)
 
-    window.addEventListener('storage', loadNotifications)
-
-    return () => {
-      unsubscribe()
-      window.removeEventListener('storage', loadNotifications)
-    }
+    return unsubscribe
   }, [loadNotifications])
 
   const unreadCount = notifications.filter(
-    (notification) => !notification.read,
+    (notification) => !notification.read
   ).length
 
   const readCount = notifications.length - unreadCount
@@ -101,27 +142,41 @@ export default function Notifications() {
     return true
   })
 
-  function handleMarkRead(id) {
-    markNotificationAsRead(id)
+  async function handleMarkRead(id) {
+    try {
+      await markNotificationAsRead(id)
+      await loadNotifications()
+    } catch (error) {
+      console.error('Failed to mark notification as read:', error)
+    }
   }
 
-  function handleMarkAllRead() {
-    markAllNotificationsAsRead()
+  async function handleMarkAllRead() {
+    try {
+      await markAllNotificationsAsRead()
+      await loadNotifications()
+    } catch (error) {
+      console.error('Failed to mark all notifications as read:', error)
+    }
   }
 
-  function handleDelete(id) {
-    const updated = notifications.filter(
-      (notification) => notification.id !== id,
-    )
-
-    saveNotifications(updated)
-    setNotifications(updated)
+  async function handleDelete(id) {
+    try {
+      await deleteNotification(id)
+      await loadNotifications()
+    } catch (error) {
+      console.error('Failed to delete notification:', error)
+    }
   }
 
-  function handleClearAll() {
-    clearNotifications()
-    setShowClearConfirmation(false)
-    loadNotifications()
+  async function handleClearAll() {
+    try {
+      await clearNotifications()
+      setShowClearConfirmation(false)
+      await loadNotifications()
+    } catch (error) {
+      console.error('Failed to clear notifications:', error)
+    }
   }
 
   function getDestination(notification) {
@@ -132,7 +187,10 @@ export default function Notifications() {
       return `/user/${encodeURIComponent(notification.profileUsername)}`
     }
 
-    if (notification.storyId) {
+    if (
+      ['like', 'comment'].includes(notification.type) &&
+      notification.storyId
+    ) {
       return `/reader?story=${encodeURIComponent(notification.storyId)}`
     }
 
@@ -145,25 +203,19 @@ export default function Notifications() {
     >
       <div className="mx-auto max-w-5xl">
 
-        {/* Page heading */}
+        {/* Header */}
         <header className="mb-8">
-          <p
-            className={`text-sm font-semibold uppercase tracking-[0.25em] ${colors.accent}`}
-          >
+          <p className={`text-sm font-semibold uppercase tracking-[0.25em] ${colors.accent}`}>
             Stay connected
           </p>
 
           <div className="mt-3 flex flex-wrap items-center justify-between gap-4">
             <div>
-              <h1
-                className={`flex flex-wrap items-center gap-3 text-3xl font-bold sm:text-4xl ${colors.heading}`}
-              >
+              <h1 className={`flex flex-wrap items-center gap-3 text-3xl font-bold sm:text-4xl ${colors.heading}`}>
                 Notifications
 
                 {unreadCount > 0 && (
-                  <span
-                    className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-semibold ${colors.primaryButton}`}
-                  >
+                  <span className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-semibold ${colors.primaryButton}`}>
                     {unreadCount}
                   </span>
                 )}
@@ -202,13 +254,12 @@ export default function Notifications() {
           </div>
         </header>
 
-        {/* Summary cards */}
+        {/* Notification statistics */}
         <section className="mb-7 grid grid-cols-3 gap-3 sm:gap-4">
           <div className={`rounded-2xl border p-4 sm:p-5 ${colors.panel}`}>
             <p className={`text-xs sm:text-sm ${colors.muted}`}>
               All notifications
             </p>
-
             <p className={`mt-2 text-2xl font-bold ${colors.heading}`}>
               {notifications.length}
             </p>
@@ -218,7 +269,6 @@ export default function Notifications() {
             <p className={`text-xs sm:text-sm ${colors.muted}`}>
               Unread
             </p>
-
             <p className={`mt-2 text-2xl font-bold ${colors.accent}`}>
               {unreadCount}
             </p>
@@ -228,18 +278,14 @@ export default function Notifications() {
             <p className={`text-xs sm:text-sm ${colors.muted}`}>
               Read
             </p>
-
             <p className={`mt-2 text-2xl font-bold ${colors.heading}`}>
               {readCount}
             </p>
           </div>
         </section>
 
-        {/* Notification filters */}
-        <nav
-          aria-label="Filter notifications"
-          className="mb-5 flex flex-wrap gap-2"
-        >
+        {/* Filters */}
+        <nav aria-label="Filter notifications" className="mb-5 flex flex-wrap gap-2">
           {[
             { value: 'all', label: 'All' },
             { value: 'unread', label: 'Unread' },
@@ -276,7 +322,7 @@ export default function Notifications() {
             </h2>
 
             <p className={`mt-2 text-sm leading-6 ${colors.muted}`}>
-              This will remove all notifications stored in this browser.
+              This will permanently remove all your notifications.
               This action cannot be undone.
             </p>
 
@@ -300,11 +346,18 @@ export default function Notifications() {
           </div>
         )}
 
-        {/* Notification list */}
-        {visibleNotifications.length > 0 ? (
+        {/* Notifications list */}
+        {loading ? (
+          <div className={`rounded-3xl border px-6 py-14 text-center ${colors.section}`}>
+            <p className={colors.muted}>
+              Loading notifications...
+            </p>
+          </div>
+        ) : visibleNotifications.length > 0 ? (
           <div className="space-y-3">
             {visibleNotifications.map((notification) => {
               const destination = getDestination(notification)
+              const avatarUrl = getAvatarUrl(notification.avatar)
 
               return (
                 <article
@@ -315,23 +368,23 @@ export default function Notifications() {
                       : colors.unreadCard
                   }`}
                 >
-                  {/* Avatar */}
+                  {/* Profile photo */}
                   <div
                     className={`flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-2xl border text-2xl ${colors.border} ${
                       isDark ? 'bg-[#33234C]' : 'bg-[#F5EBDD]'
                     }`}
                   >
-                    {notification.avatar?.startsWith('http') ||
-                    notification.avatar?.startsWith('data:image/') ? (
+                    {avatarUrl ? (
                       <img
-                        src={notification.avatar}
-                        alt=""
+                        src={avatarUrl}
+                        alt={`${notification.username || 'User'} profile`}
                         className="h-full w-full object-cover"
+                        onError={(event) => {
+                          event.currentTarget.style.display = 'none'
+                        }}
                       />
                     ) : (
-                      notification.avatar ||
-                      notificationIcons[notification.type] ||
-                      '🌙'
+                      notificationIcons[notification.type] || '🌙'
                     )}
                   </div>
 
@@ -357,8 +410,7 @@ export default function Notifications() {
 
                       {notification.target && (
                         <span className={`font-medium ${colors.accent}`}>
-                          {' '}
-                          {notification.target}
+                          {' '}{notification.target}
                         </span>
                       )}
                     </p>
@@ -371,7 +423,11 @@ export default function Notifications() {
                       {destination && (
                         <Link
                           to={destination}
-                          onClick={() => handleMarkRead(notification.id)}
+                          onClick={() => {
+                            if (!notification.read) {
+                              handleMarkRead(notification.id)
+                            }
+                          }}
                           className={`text-xs font-semibold transition hover:underline ${colors.accent}`}
                         >
                           View details →
@@ -409,10 +465,7 @@ export default function Notifications() {
             })}
           </div>
         ) : (
-          /* Empty state */
-          <div
-            className={`rounded-3xl border px-6 py-14 text-center ${colors.section}`}
-          >
+          <div className={`rounded-3xl border px-6 py-14 text-center ${colors.section}`}>
             <div className="text-5xl">
               {filter === 'unread' ? '✨' : '🔔'}
             </div>
@@ -442,13 +495,10 @@ export default function Notifications() {
           </div>
         )}
 
-        {/* Bottom section */}
-        <section
-          className={`mt-10 rounded-2xl border p-5 text-center sm:p-6 ${colors.panel}`}
-        >
+        {/* Footer */}
+        <section className={`mt-10 rounded-2xl border p-5 text-center sm:p-6 ${colors.panel}`}>
           <p className={`text-sm leading-6 ${colors.muted}`}>
-            Every like, comment, and new connection makes our community
-            brighter.
+            Every like, comment, and new connection makes our community brighter.
           </p>
 
           <p className={`mt-2 text-sm font-semibold ${colors.accent}`}>

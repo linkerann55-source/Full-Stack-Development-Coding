@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Story;
 use App\Models\Comment;
+use App\Models\Notification;
 use Illuminate\Http\Request;
 
 class CommentController extends Controller
@@ -42,6 +43,17 @@ class CommentController extends Controller
         ]);
 
         $comment->load('user:id,name,username,avatar');
+
+        // Notify the story owner about the new comment
+        if ($story->user_id !== $request->user()->id) {
+            Notification::create([
+                'user_id' => $story->user_id,
+                'actor_id' => $request->user()->id,
+                'type' => 'comment',
+                'story_id' => $story->id,
+                'message' => 'commented on your story',
+            ]);
+        }
 
         return response()->json([
             'success' => true,

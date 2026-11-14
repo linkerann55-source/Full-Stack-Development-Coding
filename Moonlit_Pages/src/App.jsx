@@ -27,6 +27,8 @@ import Login from './pages/Login.jsx'
 import Register from './pages/Register.jsx'
 import Admin from './pages/Admin.jsx'
 import AdminLogin from './pages/AdminLogin.jsx'
+import ForgotPassword from './pages/ForgotPassword.jsx'
+import ResetPassword from './pages/ResetPassword.jsx'
 
 import ApiTest from './api/ApiTest.jsx'
 
@@ -49,6 +51,8 @@ function App() {
         {/* Authentication */}
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />  
 
         {/* Admin */}
         <Route path="/admin-login" element={<AdminLogin />} />
@@ -74,7 +78,10 @@ function App() {
             <Route path="/profile" element={<Profile />} />
             <Route path="/notifications" element={<Notifications />} />
             <Route path="/following" element={<Following />} />
+            <Route path="/following/:userId" element={<Following />} />
+
             <Route path="/followers" element={<Followers />} />
+            <Route path="/followers/:userId" element={<Followers />} />
           </Route>
         </Route>
 

@@ -24,12 +24,27 @@ const sortOptions = [
 ]
 
 function normalizeStory(story, index) {
+  const author =
+    typeof story.author === 'object'
+      ? story.author?.name
+      : story.author
+
+  // Read the actual chapter count returned by Laravel
+  const chapterCount = Number(
+    story.chapters_count ??
+    story.chapter_count ??
+    story.chapterCount ??
+    (Array.isArray(story.chapters)
+      ? story.chapters.length
+      : story.chapters)
+  ) || 0
+
   return {
     ...story,
     id: story.id ?? story._id ?? story.slug ?? `story-${index}`,
     title: story.title || 'Untitled Story',
     author:
-      story.author ||
+      author ||
       story.authorName ||
       story.user?.name ||
       story.username ||
@@ -41,15 +56,25 @@ function normalizeStory(story, index) {
       'A new story waiting to be discovered.',
     coverImage: story.cover_image || story.coverImage || '',
     emoji: story.emoji || '📖',
-    rating: Number(story.rating) || 0,
-    chapters: Array.isArray(story.chapters)
-      ? story.chapters.length
-      : Number(story.chapter_count ?? story.chapters ?? story.chapterCount) || 0,
+    rating: Number(story.rating ?? story.average_rating) || 0,
+    chapters: chapterCount,
     readers: Number(
-      story.readers ?? story.readCount ?? story.views
+      story.readers ??
+      story.readCount ??
+      story.views ??
+      story.read_count
     ) || 0,
     createdAt: story.created_at || story.createdAt || '',
   }
+}
+
+function extractStories(result) {
+  if (Array.isArray(result)) return result
+  if (Array.isArray(result?.stories)) return result.stories
+  if (Array.isArray(result?.data?.stories)) return result.data.stories
+  if (Array.isArray(result?.data)) return result.data
+
+  return []
 }
 
 export default function Explore() {
@@ -61,17 +86,24 @@ export default function Explore() {
   const [publishedStories, setPublishedStories] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
+  const [refreshKey, setRefreshKey] = useState(0)
 
   const [searchInput, setSearchInput] = useState(
     searchParams.get('search') || ''
   )
 
+  const initialGenre = searchParams.get('genre') || 'All Stories'
+
   const [selectedGenre, setSelectedGenre] = useState(
-    searchParams.get('genre') || 'All Stories'
+    genres.includes(initialGenre) ? initialGenre : 'All Stories'
   )
 
+  const initialSort = searchParams.get('sort') || 'popular'
+
   const [sortBy, setSortBy] = useState(
-    searchParams.get('sort') || 'popular'
+    sortOptions.some((option) => option.value === initialSort)
+      ? initialSort
+      : 'popular'
   )
 
   const colors = {
@@ -132,18 +164,24 @@ export default function Explore() {
         const result = await getStories(
           {
             search: searchInput.trim(),
-            genre: selectedGenre,
+            genre: selectedGenre === 'All Stories'
+              ? ''
+              : selectedGenre,
           },
           {
             signal: controller.signal,
           }
         )
 
-        setPublishedStories(
-          Array.isArray(result) ? result : []
-        )
+        if (!controller.signal.aborted) {
+          setPublishedStories(extractStories(result))
+        }
       } catch (error) {
-        if (error.code !== 'ERR_CANCELED') {
+        if (
+          !controller.signal.aborted &&
+          error.code !== 'ERR_CANCELED' &&
+          error.name !== 'CanceledError'
+        ) {
           console.error('Unable to load published stories:', error)
           setLoadError('Unable to load stories. Please try again.')
         }
@@ -158,7 +196,7 @@ export default function Explore() {
       clearTimeout(timer)
       controller.abort()
     }
-  }, [searchInput, selectedGenre])
+  }, [searchInput, selectedGenre, refreshKey])
 
   // Update URL search parameters
   useEffect(() => {
@@ -200,9 +238,26 @@ export default function Explore() {
     )
   }, [publishedStories])
 
-  // Sort stories
+  // Search, filter and sort stories
   const filteredStories = useMemo(() => {
-    const result = [...allStories]
+    const search = searchInput.trim().toLowerCase()
+
+    let result = allStories.filter((story) => {
+      const matchesSearch =
+        !search ||
+        story.title.toLowerCase().includes(search) ||
+        story.author.toLowerCase().includes(search) ||
+        story.genre.toLowerCase().includes(search) ||
+        story.description.toLowerCase().includes(search)
+
+      const matchesGenre =
+        selectedGenre === 'All Stories' ||
+        story.genre.toLowerCase() === selectedGenre.toLowerCase()
+
+      return matchesSearch && matchesGenre
+    })
+
+    result = [...result]
 
     switch (sortBy) {
       case 'title':
@@ -237,12 +292,16 @@ export default function Explore() {
     }
 
     return result
-  }, [allStories, sortBy])
+  }, [allStories, searchInput, selectedGenre, sortBy])
 
   function clearFilters() {
     setSearchInput('')
     setSelectedGenre('All Stories')
     setSortBy('popular')
+  }
+
+  function retryLoading() {
+    setRefreshKey((previous) => previous + 1)
   }
 
   return (
@@ -299,7 +358,7 @@ export default function Explore() {
                 type="search"
                 value={searchInput}
                 onChange={(event) => setSearchInput(event.target.value)}
-                placeholder="Search by title, author, genre..."
+                placeholder="Search by title, author, genre, description..."
                 className={`w-full rounded-xl border py-3 pl-11 pr-4 outline-none transition ${colors.input}`}
               />
             </div>
@@ -353,11 +412,14 @@ export default function Explore() {
             </p>
 
             <h2 className={`text-2xl font-bold sm:text-3xl ${colors.heading}`}>
-              {selectedGenre === 'All Stories' ? 'Discover Stories' : selectedGenre}
+              {selectedGenre === 'All Stories'
+                ? 'Discover Stories'
+                : selectedGenre}
             </h2>
 
             <p className={`mt-2 text-sm ${colors.muted}`}>
-              {filteredStories.length} {filteredStories.length === 1 ? 'story' : 'stories'} found
+              {filteredStories.length}{' '}
+              {filteredStories.length === 1 ? 'story' : 'stories'} found
             </p>
           </div>
 
@@ -383,10 +445,7 @@ export default function Explore() {
 
             <button
               type="button"
-              onClick={() => {
-                setSearchInput((value) => value + ' ')
-                setSearchInput((value) => value.trim())
-              }}
+              onClick={retryLoading}
               className={`mt-4 rounded-xl px-5 py-2 ${colors.primaryButton}`}
             >
               Try again
@@ -423,7 +482,9 @@ export default function Explore() {
                       className="absolute inset-0 h-full w-full object-cover"
                     />
                   ) : (
-                    <span className="relative text-6xl">{story.emoji}</span>
+                    <span className="relative text-6xl">
+                      {story.emoji}
+                    </span>
                   )}
 
                   <span className={`absolute left-4 top-4 rounded-full border px-3 py-1 text-xs font-semibold ${
@@ -467,11 +528,12 @@ export default function Explore() {
                     <span>📖 {story.chapters} chapters</span>
 
                     {story.readers > 0 && (
-                      <span>👁 {story.readers.toLocaleString()} reads</span>
+                      <span>
+                        👁 {story.readers.toLocaleString()} reads
+                      </span>
                     )}
                   </div>
 
-                  {/* Open Story Details instead of Reader */}
                   <Link
                     to={`/story/${story.id}`}
                     state={{ story }}

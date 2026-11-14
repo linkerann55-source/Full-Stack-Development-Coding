@@ -19,6 +19,7 @@ class ChapterController extends Controller
             'success' => true,
             'chapters' => $story->chapters()
                 ->where('status', 'published')
+                ->orderBy('chapter_number')
                 ->get(),
         ]);
     }

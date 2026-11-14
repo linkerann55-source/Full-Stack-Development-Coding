@@ -2,81 +2,15 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useOutletContext } from 'react-router-dom'
 import { getCurrentUser, logoutUser } from '../utils/auth.js'
+import { getStories } from '../api/stories.js'
+import { searchUsers } from '../api/profile.js'
+import {
+  likeStory,
+  unlikeStory,
+  checkStoryLike,
+} from '../utils/social.js'
 
-const stories = [
-  {
-    id: 'moonlit-promise',
-    title: 'The Moonlit Promise',
-    author: 'Luna Winters',
-    genre: 'Fantasy',
-    rating: '4.9',
-    chapters: 24,
-    emoji: '🌙',
-    cover: 'from-indigo-950 via-violet-900 to-purple-700',
-    description: 'A mysterious promise beneath the moon changes everything for a young dreamer.',
-    tag: 'FEATURED',
-  },
-  {
-    id: 'letters-to-you',
-    title: 'Letters to You',
-    author: 'Mira Rose',
-    genre: 'Romance',
-    rating: '4.8',
-    chapters: 18,
-    emoji: '💌',
-    cover: 'from-purple-950 via-fuchsia-900 to-pink-700',
-    description: 'Unsent letters, unexpected meetings, and a love neither of them planned.',
-    tag: 'POPULAR',
-  },
-  {
-    id: 'whispers-dark',
-    title: 'Whispers in the Dark',
-    author: 'Evelyn Night',
-    genre: 'Mystery',
-    rating: '4.7',
-    chapters: 16,
-    emoji: '🕯️',
-    cover: 'from-slate-950 via-indigo-950 to-violet-800',
-    description: 'Every midnight, a strange whisper reveals another piece of the truth.',
-    tag: 'MYSTERY',
-  },
-  {
-    id: 'starlight-academy',
-    title: 'Starlight Academy',
-    author: 'Aria Moon',
-    genre: 'Fantasy',
-    rating: '4.9',
-    chapters: 32,
-    emoji: '✨',
-    cover: 'from-blue-950 via-indigo-800 to-violet-500',
-    description: 'At a school hidden among the stars, one student discovers an unusual power.',
-    tag: 'TRENDING',
-  },
-  {
-    id: 'summer-again',
-    title: 'Summer, Again',
-    author: 'Sophie Lane',
-    genre: 'Romance',
-    rating: '4.6',
-    chapters: 12,
-    emoji: '🌷',
-    cover: 'from-rose-950 via-purple-900 to-pink-700',
-    description: 'One summer reunion gives two old friends another chance to begin.',
-    tag: 'NEW',
-  },
-  {
-    id: 'the-last-door',
-    title: 'The Last Door',
-    author: 'Noah Grey',
-    genre: 'Thriller',
-    rating: '4.8',
-    chapters: 20,
-    emoji: '🚪',
-    cover: 'from-gray-950 via-purple-950 to-indigo-700',
-    description: 'A locked door, a forgotten key, and a secret no one should uncover.',
-    tag: 'THRILLER',
-  },
-]
+const API_ORIGIN = 'http://127.0.0.1:8000'
 
 const genres = [
   { name: 'All Stories', emoji: '✦' },
@@ -86,8 +20,101 @@ const genres = [
   { name: 'Thriller', emoji: '☾' },
 ]
 
-function StoryCard({ story, isDark }) {
+// Convert Laravel avatar paths into working image URLs
+function getAvatarUrl(avatar) {
+  if (!avatar || typeof avatar !== 'string') return null
+
+  if (avatar.startsWith('data:image/')) {
+    return avatar
+  }
+
+  if (/^https?:\/\//i.test(avatar)) {
+    try {
+      const url = new URL(avatar)
+
+      if (
+        url.hostname === 'localhost' ||
+        url.hostname === '127.0.0.1'
+      ) {
+        avatar = url.pathname
+      } else {
+        return avatar
+      }
+    } catch {
+      return null
+    }
+  }
+
+  avatar = avatar.replace(/^\/+/, '')
+
+  if (avatar.startsWith('storage/')) {
+    return `${API_ORIGIN}/${avatar}`
+  }
+
+  return `${API_ORIGIN}/storage/${avatar}`
+}
+
+function StoryCard({ story, isDark, currentUser }) {
   const readerLink = `/reader?story=${encodeURIComponent(story.id)}`
+
+  const [liked, setLiked] = useState(false)
+  const [likesCount, setLikesCount] = useState(story.likes_count ?? 0)
+  const [liking, setLiking] = useState(false)
+
+  useEffect(() => {
+    if (!currentUser) {
+      setLiked(false)
+      return
+    }
+
+    let active = true
+
+    checkStoryLike(story.id)
+      .then((data) => {
+        if (active) setLiked(data.liked)
+      })
+      .catch((error) => {
+        console.error('Failed to check story like:', error)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [story.id, currentUser])
+
+  const handleLike = async () => {
+    if (!currentUser) {
+      alert('Please log in to like this story.')
+      return
+    }
+
+    if (liking) return
+
+    setLiking(true)
+
+    const previousLiked = liked
+    const previousCount = likesCount
+
+    setLiked(!previousLiked)
+    setLikesCount(previousCount + (previousLiked ? -1 : 1))
+
+    try {
+      const response = previousLiked
+        ? await unlikeStory(story.id)
+        : await likeStory(story.id)
+
+      if (response.success) {
+        setLikesCount(response.likes_count)
+      }
+    } catch (error) {
+      setLiked(previousLiked)
+      setLikesCount(previousCount)
+      console.error('Failed to update like:', error)
+      alert('Unable to update like. Please try again.')
+    } finally {
+      setLiking(false)
+    }
+  }
 
   const cardStyle = isDark
     ? 'border-[#3A2D50] bg-[#25183D] hover:border-[#8B6CCF] shadow-black/20'
@@ -110,28 +137,18 @@ function StoryCard({ story, isDark }) {
       className={`group overflow-hidden rounded-2xl border shadow-lg transition duration-300 hover:-translate-y-1 hover:shadow-xl ${cardStyle}`}
     >
       <Link to={readerLink} aria-label={`Read ${story.title}`}>
-        <div
-          className={`relative flex h-48 items-center justify-center overflow-hidden bg-gradient-to-br ${story.cover}`}
-        >
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_40%,rgba(255,255,255,0.18),transparent_60%)]" />
+        <div className="relative flex h-48 items-center justify-center overflow-hidden bg-gradient-to-br from-indigo-950 via-violet-900 to-purple-700">
+          {story.cover_image ? (
+            <img
+              src={story.cover_image}
+              alt={story.title}
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+          ) : (
+            <span className="text-7xl">🌙</span>
+          )}
 
-          <span className="absolute right-5 top-4 text-2xl text-white/80">
-            ✦
-          </span>
-
-          <span className="absolute bottom-5 left-5 text-lg text-white/80">
-            ✧
-          </span>
-
-          <span className="relative text-7xl drop-shadow-lg transition duration-300 group-hover:scale-110">
-            {story.emoji}
-          </span>
-
-          <span className="absolute left-3 top-3 rounded-full border border-white/30 bg-black/40 px-3 py-1 text-[10px] font-bold tracking-widest text-white backdrop-blur">
-            {story.tag}
-          </span>
-
-          <span className="absolute bottom-3 right-3 rounded-lg border border-white/10 bg-black/40 px-2 py-1 text-xs text-white backdrop-blur">
+          <span className="absolute bottom-3 right-3 rounded-lg bg-black/50 px-2 py-1 text-xs text-white">
             {story.chapters} chapters
           </span>
         </div>
@@ -143,9 +160,18 @@ function StoryCard({ story, isDark }) {
             {story.genre}
           </span>
 
-          <span className="text-xs font-medium text-amber-500">
-            ★ {story.rating}
-          </span>
+          <button
+            type="button"
+            onClick={handleLike}
+            disabled={liking}
+            aria-label={liked ? 'Unlike story' : 'Like story'}
+            className={`flex items-center gap-1.5 text-sm transition hover:scale-105 disabled:opacity-50 ${
+              liked ? 'text-pink-500' : 'text-gray-500'
+            }`}
+          >
+            <span>{liked ? '♥' : '♡'}</span>
+            <span>{likesCount} likes</span>
+          </button>
         </div>
 
         <Link to={readerLink}>
@@ -173,6 +199,95 @@ function StoryCard({ story, isDark }) {
   )
 }
 
+function UserSearchResults({
+  users,
+  loading,
+  error,
+  isDark,
+  colors,
+}) {
+  return (
+    <div className={`mt-4 overflow-hidden rounded-2xl border ${colors.panel}`}>
+      <div className={`border-b px-5 py-3 ${colors.border}`}>
+        <h3 className={`font-semibold ${colors.heading}`}>
+          People
+        </h3>
+
+        <p className={`mt-1 text-xs ${colors.muted}`}>
+          Search results for usernames
+        </p>
+      </div>
+
+      <div className="p-4">
+        {loading ? (
+          <p className={`py-3 text-center text-sm ${colors.body}`}>
+            Searching users...
+          </p>
+        ) : error ? (
+          <p className="py-3 text-center text-sm text-red-400">
+            {error}
+          </p>
+        ) : users.length > 0 ? (
+          <div className="space-y-3">
+            {users.map((user) => (
+              <Link
+                key={user.id}
+                to={`/user/${encodeURIComponent(user.username)}`}
+                className={`flex items-center gap-3 rounded-xl p-3 transition ${
+                  isDark
+                    ? 'hover:bg-[#35254D]'
+                    : 'hover:bg-[#F0E3D4]'
+                }`}
+              >
+                {getAvatarUrl(user.avatar) ? (
+                  <img
+                    src={getAvatarUrl(user.avatar)}
+                    alt={user.username}
+                    onError={(event) => {
+                      event.currentTarget.style.display = 'none'
+                    }}
+                    className="h-12 w-12 shrink-0 rounded-full border border-purple-400/30 object-cover"
+                  />
+                ) : (
+                  <div
+                    className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-xl ${
+                      isDark ? 'bg-[#3A2D50]' : 'bg-[#EAD9C7]'
+                    }`}
+                  >
+                    🌙
+                  </div>
+                )}
+
+                <div className="min-w-0 flex-1">
+                  <p className={`truncate font-semibold ${colors.heading}`}>
+                    {user.name || user.username}
+                  </p>
+
+                  <p className={`truncate text-sm ${colors.muted}`}>
+                    @{user.username}
+                  </p>
+
+                  {user.bio && (
+                    <p className={`mt-1 line-clamp-1 text-xs ${colors.body}`}>
+                      {user.bio}
+                    </p>
+                  )}
+                </div>
+
+                <span className={colors.accent}>→</span>
+              </Link>
+            ))}
+          </div>
+        ) : (
+          <p className={`py-3 text-center text-sm ${colors.body}`}>
+            No matching users found.
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function Home() {
   const { theme } = useOutletContext()
   const isDark = theme === 'dark'
@@ -181,15 +296,25 @@ export default function Home() {
   const [selectedGenre, setSelectedGenre] = useState('All Stories')
   const [currentUser, setCurrentUser] = useState(() => getCurrentUser())
 
+  const [stories, setStories] = useState([])
+  const [loadingStories, setLoadingStories] = useState(true)
+  const [storiesError, setStoriesError] = useState('')
+
+  const [searchedUsers, setSearchedUsers] = useState([])
+  const [loadingUsers, setLoadingUsers] = useState(false)
+  const [userSearchError, setUserSearchError] = useState('')
+
   const navigate = useNavigate()
 
-  // Cozy Book Café / Midnight Library
+  const featuredStory = [...stories].sort(
+    (a, b) => (b.likes_count ?? 0) - (a.likes_count ?? 0)
+  )[0]
+
   const colors = {
     heading: isDark ? 'text-[#F5EFFB]' : 'text-[#49372E]',
     body: isDark ? 'text-[#B9ADC9]' : 'text-[#88796F]',
     muted: isDark ? 'text-[#B9ADC9]' : 'text-[#88796F]',
     accent: isDark ? 'text-[#D6B779]' : 'text-[#A66B50]',
-
     border: isDark ? 'border-[#3A2D50]' : 'border-[#E7D9C9]',
 
     panel: isDark
@@ -209,6 +334,43 @@ export default function Home() {
       : 'border-[#E7D9C9] bg-gradient-to-br from-[#FFF9F1] via-[#F5EBDD] to-[#EAD9C7]',
   }
 
+  // Load published stories
+  useEffect(() => {
+    const loadStories = async () => {
+      try {
+        setLoadingStories(true)
+        setStoriesError('')
+
+        const response = await getStories()
+
+        const storyList = Array.isArray(response)
+          ? response
+          : response.stories || response.data || []
+
+        setStories(
+          storyList.map((story) => ({
+            ...story,
+            author: story.author || story.user?.name || 'Unknown Author',
+            genre: story.genre || 'Other',
+            description: story.description || '',
+            chapters: story.chapters_count ?? 0,
+            cover_image: story.cover_image || '',
+            likes_count: story.likes_count ?? 0,
+            emoji: '🌙',
+          }))
+        )
+      } catch (error) {
+        console.error('Failed to load Home stories:', error)
+        setStoriesError('Unable to load stories. Please try again.')
+      } finally {
+        setLoadingStories(false)
+      }
+    }
+
+    loadStories()
+  }, [])
+
+  // Update logged-in user
   useEffect(() => {
     const updateUser = () => setCurrentUser(getCurrentUser())
 
@@ -221,6 +383,52 @@ export default function Home() {
     }
   }, [])
 
+  // Search users by username
+  useEffect(() => {
+    const searchText = search.trim()
+
+    if (!searchText) {
+      setSearchedUsers([])
+      setUserSearchError('')
+      setLoadingUsers(false)
+      return
+    }
+
+    let active = true
+
+    const timer = setTimeout(async () => {
+      try {
+        setLoadingUsers(true)
+        setUserSearchError('')
+
+        const response = await searchUsers(searchText)
+
+        if (!active) return
+
+        const userList = Array.isArray(response)
+          ? response
+          : response.users || response.data || []
+
+        setSearchedUsers(userList)
+      } catch (error) {
+        if (active) {
+          console.error('Failed to search users:', error)
+          setSearchedUsers([])
+          setUserSearchError('Unable to search users. Please try again.')
+        }
+      } finally {
+        if (active) {
+          setLoadingUsers(false)
+        }
+      }
+    }, 300)
+
+    return () => {
+      active = false
+      clearTimeout(timer)
+    }
+  }, [search])
+
   async function handleLogout() {
     await logoutUser()
 
@@ -231,16 +439,19 @@ export default function Home() {
     navigate('/')
   }
 
+  // Filter stories
   const filteredStories = stories.filter((story) => {
-    const matchesGenre =
-      selectedGenre === 'All Stories' || story.genre === selectedGenre
-
     const searchText = search.toLowerCase().trim()
 
+    const matchesGenre =
+      selectedGenre === 'All Stories' ||
+      story.genre?.toLowerCase() === selectedGenre.toLowerCase()
+
     const matchesSearch =
-      story.title.toLowerCase().includes(searchText) ||
-      story.author.toLowerCase().includes(searchText) ||
-      story.genre.toLowerCase().includes(searchText)
+      !searchText ||
+      story.title?.toLowerCase().includes(searchText) ||
+      story.author?.toLowerCase().includes(searchText) ||
+      story.genre?.toLowerCase().includes(searchText)
 
     return matchesGenre && matchesSearch
   })
@@ -275,13 +486,13 @@ export default function Home() {
           className={`flex flex-wrap items-center justify-between gap-4 border-b py-5 ${colors.border}`}
         >
           <Link to="/" className="group flex items-center gap-3">
-          <div className={`h-12 w-12 overflow-hidden rounded-xl shadow-sm ${isDark ? 'bg-[#25183D]' : 'bg-[#F5EBDD]'}`}>
+            <div
+              className={`h-12 w-12 overflow-hidden rounded-xl shadow-sm ${
+                isDark ? 'bg-[#25183D]' : 'bg-[#F5EBDD]'
+              }`}
+            >
               <img
-                src={
-                  isDark
-                  ? '/images/logo2.png'
-                  : '/images/moonlit-page.png'
-                }
+                src={isDark ? '/images/logo2.png' : '/images/moonlit-page.png'}
                 alt="Moonlit Pages Logo"
                 className="h-full w-full object-contain"
               />
@@ -305,7 +516,7 @@ export default function Home() {
                   to="/profile"
                   className={`max-w-28 truncate rounded-lg px-3 py-2 text-sm transition hover:underline sm:max-w-40 ${colors.accent}`}
                 >
-                {currentUser.username || currentUser.name || 'My Profile'}
+                  {currentUser.username || currentUser.name || 'My Profile'}
                 </Link>
 
                 <button
@@ -409,9 +620,9 @@ export default function Home() {
               <span className={`absolute bottom-12 right-12 text-xl ${colors.accent}`}>✧</span>
 
               <div className="relative flex flex-col items-center">
-                <div className="h-80 w-80 overflow-hidden rounded-1xl">
+                <div className="h-80 w-80 overflow-hidden rounded-xl">
                   <img
-                    src="images/logo.png"
+                    src="/images/logo.png"
                     alt="Moonlit Pages crescent moon logo"
                     className="h-full w-full object-contain"
                   />
@@ -422,96 +633,103 @@ export default function Home() {
         </section>
 
         {/* Search */}
-        <form
-          onSubmit={(event) => {
-            event.preventDefault()
-            navigate(`/explore?search=${encodeURIComponent(search)}`)
-          }}
-          className={`flex items-center gap-3 rounded-2xl border p-3 shadow-lg transition focus-within:ring-2 sm:p-4 ${
-            isDark
-              ? 'border-[#3A2D50] bg-[#25183D] focus-within:ring-[#8B6CCF]/30'
-              : 'border-[#E7D9C9] bg-[#FFF9F1] focus-within:ring-[#A66B50]/20'
-          }`}
-        >
-          <span className={`text-2xl ${colors.accent}`}>⌕</span>
+        <section>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault()
 
-          <input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search stories, authors, or genres..."
-            aria-label="Search stories"
-            className={`min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:opacity-60 sm:text-base ${colors.heading}`}
-          />
-
-          <button
-            type="submit"
-            className={`shrink-0 rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition sm:px-6 ${colors.primaryButton}`}
+              if (search.trim()) {
+                navigate(`/explore?search=${encodeURIComponent(search.trim())}`)
+              }
+            }}
+            className={`flex items-center gap-3 rounded-2xl border p-3 shadow-lg transition focus-within:ring-2 sm:p-4 ${
+              isDark
+                ? 'border-[#3A2D50] bg-[#25183D] focus-within:ring-[#8B6CCF]/30'
+                : 'border-[#E7D9C9] bg-[#FFF9F1] focus-within:ring-[#A66B50]/20'
+            }`}
           >
-            Search
-          </button>
-        </form>
+            <span className={`text-2xl ${colors.accent}`}>⌕</span>
+
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search stories, authors, or usernames..."
+              aria-label="Search stories and users"
+              className={`min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:opacity-60 sm:text-base ${colors.heading}`}
+            />
+
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch('')}
+                className={`px-2 text-sm ${colors.muted}`}
+                aria-label="Clear search"
+              >
+                ✕
+              </button>
+            )}
+
+            <button
+              type="submit"
+              className={`shrink-0 rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition sm:px-6 ${colors.primaryButton}`}
+            >
+              Search
+            </button>
+          </form>
+
+          {/* Username search results */}
+          {search.trim() && (
+            <UserSearchResults
+              users={searchedUsers}
+              loading={loadingUsers}
+              error={userSearchError}
+              isDark={isDark}
+              colors={colors}
+            />
+          )}
+        </section>
 
         {/* Featured story */}
-        <section className={`relative overflow-hidden rounded-3xl border p-6 shadow-xl sm:p-10 lg:p-12 ${colors.sectionBackground}`}>
-          <div className="pointer-events-none absolute -right-16 -top-20 h-72 w-72 rounded-full bg-[#8B6CCF]/10 blur-3xl" />
+        {!loadingStories && featuredStory && (
+          <section className="mb-12">
+            <div className={`relative overflow-hidden rounded-3xl border p-8 sm:p-10 ${colors.panel}`}>
+              <div className="relative z-10 max-w-2xl">
+                <p className={`text-xs font-semibold tracking-[0.2em] ${colors.accent}`}>
+                  ✦ FEATURED STORY
+                </p>
 
-          <div className="relative grid items-center gap-8 md:grid-cols-[1.3fr_0.7fr]">
-            <div>
-              <span
-                className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold tracking-widest ${
-                  isDark
-                    ? 'border-[#D6B779]/40 bg-[#D6B779]/10 text-[#D6B779]'
-                    : 'border-[#A66B50]/30 bg-[#A66B50]/10 text-[#A66B50]'
-                }`}
-              >
-                ✦ EDITOR'S PICK
-              </span>
+                <h2 className={`mt-4 font-serif text-3xl font-bold sm:text-4xl ${colors.heading}`}>
+                  {featuredStory.title}
+                </h2>
 
-              <h2 className={`mt-6 max-w-xl font-serif text-3xl font-bold leading-tight sm:text-5xl ${colors.heading}`}>
-                The Moonlit Promise
-              </h2>
+                <p className={`mt-4 text-sm leading-7 ${colors.body}`}>
+                  {featuredStory.description || 'Discover this story on Moonlit Pages.'}
+                </p>
 
-              <p className={`mt-4 max-w-lg text-sm leading-7 sm:text-base ${colors.body}`}>
-                Beneath a silver moon, an ordinary girl discovers a promise
-                written long before she was born. Some secrets are meant to
-                change the stars.
-              </p>
+                <div className={`mt-5 flex flex-wrap gap-4 text-sm ${colors.muted}`}>
+                  <span>✧ {featuredStory.genre}</span>
+                  <span>♥ {featuredStory.likes_count ?? 0} likes</span>
+                  <span>{featuredStory.chapters} chapters</span>
+                </div>
 
-              <div className={`mt-5 flex flex-wrap gap-4 text-xs sm:text-sm ${colors.body}`}>
-                <span>✧ Fantasy</span>
-                <span className="font-medium text-amber-500">★ 4.9 rating</span>
-                <span>24 chapters</span>
+                <Link
+                  to={`/reader?story=${encodeURIComponent(featuredStory.id)}`}
+                  className={`mt-7 inline-flex rounded-xl px-6 py-3 text-sm font-semibold text-white transition ${colors.primaryButton}`}
+                >
+                  Read Featured Story
+                </Link>
               </div>
 
-              <Link
-                to="/reader?story=moonlit-promise"
-                className={`mt-7 inline-flex items-center gap-3 rounded-xl px-6 py-3 font-semibold text-white shadow-lg transition hover:-translate-y-0.5 ${colors.primaryButton}`}
-              >
-                Read Featured Story <span>→</span>
-              </Link>
+              {featuredStory.cover_image && (
+                <img
+                  src={featuredStory.cover_image}
+                  alt={featuredStory.title}
+                  className="absolute inset-0 h-full w-full object-cover opacity-50"
+                />
+              )}
             </div>
-
-            <div className="flex min-h-52 items-center justify-center md:min-h-64">
-              <div
-                className={`relative flex h-52 w-52 items-center justify-center rounded-full border shadow-xl sm:h-64 sm:w-64 ${
-                  isDark
-                    ? 'border-[#594477] bg-gradient-to-br from-[#604493]/40 via-[#25183D] to-[#10091F]'
-                    : 'border-[#D8BFA3] bg-gradient-to-br from-[#FFF9F1] via-[#F5EBDD] to-[#D8BFA3]'
-                }`}
-              >
-                <div className={`absolute inset-4 rounded-full border ${colors.border}`} />
-                <div className={`absolute inset-8 rounded-full border ${colors.border}`} />
-
-                <span className="text-8xl drop-shadow-lg sm:text-9xl">
-                  🌙
-                </span>
-
-                <span className="absolute right-8 top-8 text-2xl text-amber-400">✦</span>
-                <span className={`absolute bottom-10 left-8 text-xl ${colors.accent}`}>✧</span>
-              </div>
-            </div>
-          </div>
-        </section>
+          </section>
+        )}
 
         {/* Genre filters */}
         <section>
@@ -577,17 +795,34 @@ export default function Home() {
             </div>
 
             <span className={`text-sm ${colors.muted}`}>
-              {filteredStories.length} stories
+              {filteredStories.length} stories found
             </span>
           </div>
 
-          {filteredStories.length > 0 ? (
+          {loadingStories ? (
+            <div className={`rounded-2xl border p-10 text-center ${colors.panel}`}>
+              <p className={colors.body}>Loading stories...</p>
+            </div>
+          ) : storiesError ? (
+            <div className={`rounded-2xl border p-10 text-center ${colors.panel}`}>
+              <p className="text-sm text-red-400">{storiesError}</p>
+
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className={`mt-5 rounded-xl px-5 py-2.5 text-sm font-semibold text-white ${colors.primaryButton}`}
+              >
+                Try again
+              </button>
+            </div>
+          ) : filteredStories.length > 0 ? (
             <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3">
               {filteredStories.map((story) => (
                 <StoryCard
                   key={story.id}
                   story={story}
                   isDark={isDark}
+                  currentUser={currentUser}
                 />
               ))}
             </div>
@@ -664,7 +899,6 @@ export default function Home() {
             Made for the stories that live under the moonlight.
           </p>
         </footer>
-
       </div>
     </div>
   )

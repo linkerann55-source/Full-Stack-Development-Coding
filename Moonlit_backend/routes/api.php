@@ -6,6 +6,10 @@ use App\Http\Controllers\Api\StoryController;
 use App\Http\Controllers\Api\ChapterController;
 use App\Http\Controllers\Api\CommentController;
 use App\Http\Controllers\Api\SocialController;
+use App\Http\Controllers\Api\ProfileController;
+use App\Http\Controllers\Api\NotificationController;
+use App\Http\Controllers\Api\ConversationController;
+use App\Http\Controllers\Api\PollController;
 
 Route::get('/test', function () {
     return response()->json([
@@ -15,16 +19,35 @@ Route::get('/test', function () {
     ]);
 });
 
+Route::get('/users/search', [ProfileController::class, 'search']);
+
+Route::get('/users/username/{username}', [
+    ProfileController::class,
+    'publicShow'
+]);
+
 Route::prefix('')->group(function () {
 
     // Public authentication routes
     Route::post('/register', [AuthController::class, 'register']);
     Route::post('/login', [AuthController::class, 'login']);
+    Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
+    Route::post('/reset-password', [AuthController::class, 'resetPassword']);
 
     // Protected authentication routes
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('/logout', [AuthController::class, 'logout']);
         Route::get('/user', [AuthController::class, 'user']);
+        Route::get('/profile', [ProfileController::class, 'show']);
+        Route::put('/profile', [ProfileController::class, 'update']);
+        Route::post('/profile/photos', [ProfileController::class, 'uploadPhotos']);
+
+        // Notifications
+        Route::get('/notifications', [NotificationController::class, 'index']);
+        Route::put('/notifications/{id}/read', [NotificationController::class, 'markAsRead']);
+        Route::put('/notifications/read-all', [NotificationController::class, 'markAllAsRead']);
+        Route::delete('/notifications/{id}', [NotificationController::class, 'destroy']);
+        Route::delete('/notifications', [NotificationController::class, 'clearAll']);
     });
 
 });
@@ -87,3 +110,24 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/users/{userId}/check-follow', [SocialController::class, 'checkFollow']);
 });
 
+// Public conversation routes
+Route::get('/conversations', [ConversationController::class, 'index']);
+
+// Public poll routes
+Route::get('/polls', [PollController::class, 'index']);
+
+// Protected conversation and poll routes
+Route::middleware('auth:sanctum')->group(function () {
+
+    // Conversations
+    Route::post('/conversations', [ConversationController::class, 'store']);
+    Route::put('/conversations/{id}', [ConversationController::class, 'update']);
+    Route::delete('/conversations/{id}', [ConversationController::class, 'destroy']);
+    Route::post('/conversations/{id}/replies', [ConversationController::class, 'addReply']);
+
+    // Polls
+    Route::post('/polls', [PollController::class, 'store']);
+    Route::post('/polls/{id}/vote', [PollController::class, 'vote']);
+    Route::post('/polls/{id}/replies', [PollController::class, 'addReply']);
+    Route::delete('/polls/{id}', [PollController::class, 'destroy']);
+});

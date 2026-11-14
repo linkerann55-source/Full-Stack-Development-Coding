@@ -60,4 +60,29 @@ class User extends Authenticatable
     {
         return $this->hasMany(Follow::class, 'follower_id');
     }
+
+    public function conversations(): HasMany
+    {
+        return $this->hasMany(Conversation::class);
+    }
+
+    public function conversationReplies(): HasMany
+    {
+        return $this->hasMany(ConversationReply::class);
+    }
+
+    public function polls(): HasMany
+    {
+        return $this->hasMany(Poll::class);
+    }
+
+    public function pollReplies(): HasMany
+    {
+        return $this->hasMany(PollReply::class);
+    }
+
+    public function pollVotes(): HasMany
+    {
+        return $this->hasMany(PollVote::class);
+    }
 }

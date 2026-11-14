@@ -7,20 +7,34 @@ use App\Models\Story;
 use App\Models\User;
 use App\Models\Like;
 use App\Models\Follow;
+use App\Models\Notification;
 use Illuminate\Http\Request;
 
 class SocialController extends Controller
 {
-    // Like a story
     public function like(Request $request, $storyId)
     {
         $story = Story::where('status', 'published')
             ->findOrFail($storyId);
 
-        Like::firstOrCreate([
+        $like = Like::firstOrCreate([
             'story_id' => $story->id,
             'user_id' => $request->user()->id,
         ]);
+
+        // Notify the story owner only when a new like is created
+        if (
+            $like->wasRecentlyCreated &&
+            $story->user_id !== $request->user()->id
+        ) {
+            Notification::create([
+                'user_id' => $story->user_id,
+                'actor_id' => $request->user()->id,
+                'type' => 'like',
+                'story_id' => $story->id,
+                'message' => 'liked your story',
+            ]);
+        }
 
         return response()->json([
             'success' => true,
@@ -46,7 +60,6 @@ class SocialController extends Controller
         ]);
     }
 
-    // Follow an author
     public function follow(Request $request, $userId)
     {
         $user = User::findOrFail($userId);
@@ -58,10 +71,21 @@ class SocialController extends Controller
             ], 422);
         }
 
-        Follow::firstOrCreate([
+        $follow = Follow::firstOrCreate([
             'follower_id' => $request->user()->id,
             'following_id' => $user->id,
         ]);
+
+        // Notify only when a new follow is created
+        if ($follow->wasRecentlyCreated) {
+            Notification::create([
+                'user_id' => $user->id,
+                'actor_id' => $request->user()->id,
+                'type' => 'follow',
+                'story_id' => null,
+                'message' => 'started following you',
+            ]);
+        }
 
         return response()->json([
             'success' => true,

@@ -1,16 +1,27 @@
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   Link,
+  useNavigate,
   useParams,
   useOutletContext,
 } from 'react-router-dom'
+
 import { getStory } from '../api/stories.js'
+import { getChapters } from '../api/chapters.js'
+
+import {
+  getComments,
+  addComment,
+  updateComment,
+  deleteComment,
+} from '../utils/comments.js'
+
+import { getCurrentUser } from '../utils/auth.js'
 
 const BOOKMARKS_KEY = 'moonlit_pages_bookmarks'
-const OFFLINE_KEY = 'moonlit_pages_offline_stories'
+const HISTORY_KEY = 'moonlit_pages_reading_history'
 
-// Read saved data from localStorage
 function readList(key) {
   try {
     const value = JSON.parse(localStorage.getItem(key) || '[]')
@@ -20,18 +31,85 @@ function readList(key) {
   }
 }
 
-// Save data to localStorage
 function saveList(key, value) {
   localStorage.setItem(key, JSON.stringify(value))
 }
 
-export default function Reader() {
-  const { id: storyId } = useParams()
+function extractStory(result) {
+  return result?.story || result?.data?.story || result?.data || result
+}
 
-  // Get theme from Layout
-  const outletContext = useOutletContext()
-  const theme = outletContext?.theme || 'dark'
-  const isDark = theme === 'dark'
+function extractChapters(result) {
+  if (Array.isArray(result)) return result
+  if (Array.isArray(result?.chapters)) return result.chapters
+  if (Array.isArray(result?.data?.chapters)) return result.data.chapters
+  if (Array.isArray(result?.data)) return result.data
+  return []
+}
+
+function extractComments(result) {
+  if (Array.isArray(result)) return result
+  if (Array.isArray(result?.comments)) return result.comments
+  if (Array.isArray(result?.data?.comments)) return result.data.comments
+  return []
+}
+
+function normalizeStory(data) {
+  if (!data) return null
+
+  return {
+    ...data,
+    coverImage: data.cover_image || data.coverImage || '',
+    allowScreenshots: Boolean(
+      data.allow_screenshots ?? data.allowScreenshots
+    ),
+    author:
+      typeof data.author === 'object'
+        ? data.author?.name || data.user?.name || 'Anonymous'
+        : data.author || data.user?.name || 'Anonymous',
+  }
+}
+
+export default function Reader() {
+  const { id: storyId, chapterId } = useParams()
+  const navigate = useNavigate()
+
+  const outletContext = useOutletContext() || {}
+  const isDark = outletContext.theme !== 'light'
+
+  const [currentUser] = useState(() => getCurrentUser())
+
+  const [story, setStory] = useState(null)
+  const [storyLoading, setStoryLoading] = useState(true)
+  const [storyError, setStoryError] = useState('')
+
+  const [chapters, setChapters] = useState([])
+  const [chaptersLoading, setChaptersLoading] = useState(true)
+  const [currentChapterIndex, setCurrentChapterIndex] = useState(0)
+
+  const [comments, setComments] = useState([])
+  const [commentText, setCommentText] = useState('')
+  const [commentsLoading, setCommentsLoading] = useState(false)
+  const [commentSubmitting, setCommentSubmitting] = useState(false)
+  const [editingCommentId, setEditingCommentId] = useState(null)
+  const [editingCommentText, setEditingCommentText] = useState('')
+
+  const [bookmarks, setBookmarks] = useState(() =>
+    readList(BOOKMARKS_KEY)
+  )
+
+  const [message, setMessage] = useState('')
+
+  // Reset page state
+  useEffect(() => {
+    setStory(null)
+    setStoryError('')
+    setStoryLoading(true)
+    setChapters([])
+    setChaptersLoading(true)
+    setCurrentChapterIndex(0)
+    setMessage('')
+  }, [storyId])
 
   // Theme colours
   const colors = {
@@ -39,18 +117,9 @@ export default function Reader() {
       ? 'bg-[#10091F] text-[#F5EFFB]'
       : 'bg-[#F5EBDD] text-[#49372E]',
 
-    heading: isDark
-      ? 'text-[#FFFFFF]'
-      : 'text-[#3D2C25]',
-
-    muted: isDark
-      ? 'text-[#D0C2E2]'
-      : 'text-[#705B50]',
-
-    accent: isDark
-      ? 'text-[#D7B9FF]'
-      : 'text-[#70458F]',
-
+    heading: isDark ? 'text-white' : 'text-[#3D2C25]',
+    muted: isDark ? 'text-[#D0C2E2]' : 'text-[#705B50]',
+    accent: isDark ? 'text-[#D7B9FF]' : 'text-[#70458F]',
     link: isDark
       ? 'text-[#D7B9FF] hover:text-white'
       : 'text-[#70458F] hover:text-[#49372E]',
@@ -63,9 +132,7 @@ export default function Reader() {
       ? 'border-[#493565] bg-[#211535]'
       : 'border-[#D9C8B8] bg-[#FFF9F2]',
 
-    content: isDark
-      ? 'text-[#F3ECFA]'
-      : 'text-[#49372E]',
+    content: isDark ? 'text-[#F3ECFA]' : 'text-[#49372E]',
 
     button: isDark
       ? 'border-[#70558F] bg-[#35234D] text-white hover:bg-[#493565]'
@@ -75,87 +142,149 @@ export default function Reader() {
       ? 'border-[#70558F] text-[#E5D5F5] hover:bg-[#35234D]'
       : 'border-[#C9B3DE] text-[#49372E] hover:bg-[#EDE1F5]',
 
-    divider: isDark
-      ? 'border-[#493565]'
-      : 'border-[#E3D2C2]',
-
-    message: isDark
-      ? 'text-[#D7B9FF]'
-      : 'text-[#70458F]',
+    divider: isDark ? 'border-[#493565]' : 'border-[#E3D2C2]',
+    message: isDark ? 'text-[#D7B9FF]' : 'text-[#70458F]',
   }
 
-  const [story, setStory] = useState(null)
-  const [storyLoading, setStoryLoading] = useState(true)
-  const [storyError, setStoryError] = useState('')
+  // Load story from API
+  const loadStory = useCallback(async () => {
+    try {
+      setStoryLoading(true)
+      setStoryError('')
 
-  const [bookmarks, setBookmarks] = useState(() =>
-    readList(BOOKMARKS_KEY)
-  )
+      const result = await getStory(storyId)
+      const data = extractStory(result)
 
-  const [offlineStories, setOfflineStories] = useState(() =>
-    readList(OFFLINE_KEY)
-  )
-
-  const [message, setMessage] = useState('')
-
-  // Load story from Laravel API
-  useEffect(() => {
-    let isMounted = true
-
-    async function loadStory() {
-      try {
-        setStoryLoading(true)
-        setStoryError('')
-        setStory(null)
-
-        const result = await getStory(storyId)
-
-        if (!isMounted) return
-
-        setStory({
-          ...result,
-          coverImage: result.cover_image || '',
-          allowScreenshots: Boolean(result.allow_screenshots),
-          author: result.author || result.user?.name || 'Anonymous',
-        })
-      } catch (error) {
-        console.error('Unable to load story:', error)
-
-        if (!isMounted) return
-
-        setStoryError(
-          error.response?.status === 404
-            ? 'This story could not be found or is no longer published.'
-            : 'Unable to load this story. Please try again.'
-        )
-      } finally {
-        if (isMounted) {
-          setStoryLoading(false)
-        }
+      if (!data || !data.id) {
+        throw new Error('Story not found.')
       }
-    }
 
+      setStory(normalizeStory(data))
+    } catch (error) {
+      console.error('Unable to load story:', error)
+      setStory(null)
+
+      setStoryError(
+        error.response?.status === 404
+          ? 'This story could not be found or is no longer published.'
+          : 'Unable to load this story. Please check your internet connection.'
+      )
+    } finally {
+      setStoryLoading(false)
+    }
+  }, [storyId])
+
+  useEffect(() => {
     if (storyId) {
       loadStory()
     } else {
       setStory(null)
       setStoryLoading(false)
     }
+  }, [storyId, loadStory])
 
-    return () => {
-      isMounted = false
+  // Load chapters from API
+  const loadChapters = useCallback(async () => {
+    try {
+      setChaptersLoading(true)
+
+      const result = await getChapters(storyId)
+      const chapterList = extractChapters(result)
+
+      const published = chapterList
+        .filter((chapter) => chapter.status !== 'draft')
+        .sort((a, b) => {
+          return (
+            Number(a.chapter_number ?? a.chapterNumber ?? 0) -
+            Number(b.chapter_number ?? b.chapterNumber ?? 0)
+          )
+        })
+
+      setChapters(published)
+    } catch (error) {
+      console.error('Unable to load chapters:', error)
+      setChapters([])
+    } finally {
+      setChaptersLoading(false)
     }
   }, [storyId])
 
-  // Update bookmarks and offline stories when changed in another tab
+  useEffect(() => {
+    if (storyId) {
+      loadChapters()
+    } else {
+      setChapters([])
+      setChaptersLoading(false)
+    }
+  }, [storyId, loadChapters])
+
+  // Load comments
+  const loadComments = useCallback(async () => {
+    try {
+      setCommentsLoading(true)
+
+      const result = await getComments(storyId)
+      setComments(extractComments(result))
+    } catch (error) {
+      console.error('Unable to load comments:', error)
+      setComments([])
+    } finally {
+      setCommentsLoading(false)
+    }
+  }, [storyId])
+
+  useEffect(() => {
+    if (storyId) {
+      loadComments()
+    }
+  }, [storyId, loadComments])
+
+  // Restore reading progress
+  useEffect(() => {
+    if (!chapters.length) {
+      setCurrentChapterIndex(0)
+      return
+    }
+
+    if (chapterId) {
+      const foundIndex = chapters.findIndex(
+        (chapter) => String(chapter.id) === String(chapterId)
+      )
+
+      if (foundIndex !== -1) {
+        setCurrentChapterIndex(foundIndex)
+        return
+      }
+    }
+
+    const progressKey = `moonlit_pages_progress_${storyId}`
+    const savedProgress = localStorage.getItem(progressKey)
+    const savedIndex = Number(savedProgress)
+
+    const validIndex = Math.min(
+      Math.max(Number.isFinite(savedIndex) ? savedIndex : 0, 0),
+      chapters.length - 1
+    )
+
+    setCurrentChapterIndex(validIndex)
+
+    const savedChapter = chapters[validIndex]
+
+    if (
+      savedChapter &&
+      String(savedChapter.id) !== String(chapterId || '')
+    ) {
+      navigate(`/reader/${storyId}/${savedChapter.id}`, {
+        replace: true,
+      })
+    }
+  }, [chapters, chapterId, storyId, navigate])
+
+  // Listen for bookmark changes
   useEffect(() => {
     function handleStorage(event) {
       if (event.key === BOOKMARKS_KEY || event.key === null) {
         setBookmarks(readList(BOOKMARKS_KEY))
-      }
-
-      if (event.key === OFFLINE_KEY || event.key === null) {
-        setOfflineStories(readList(OFFLINE_KEY))
       }
     }
 
@@ -166,19 +295,56 @@ export default function Reader() {
     }
   }, [])
 
-  // Check whether story is bookmarked
+  const currentChapter = chapters[currentChapterIndex] || null
+
+  // Save reading progress
+  function saveReadingProgress(index) {
+    if (index < 0 || index >= chapters.length) return
+
+    const selectedChapter = chapters[index]
+
+    setCurrentChapterIndex(index)
+
+    localStorage.setItem(
+      `moonlit_pages_progress_${storyId}`,
+      String(index)
+    )
+
+    try {
+      const history = readList(HISTORY_KEY)
+
+      const historyEntry = {
+        id: String(story.id),
+        title: story.title,
+        cover_image: story.coverImage || '',
+        chapter_id: selectedChapter.id,
+        chapter_title: selectedChapter.title,
+        chapter_number:
+          selectedChapter.chapter_number ?? index + 1,
+        last_read_at: new Date().toISOString(),
+      }
+
+      const updatedHistory = [
+        historyEntry,
+        ...history.filter(
+          (item) => String(item.id) !== String(story.id)
+        ),
+      ].slice(0, 50)
+
+      saveList(HISTORY_KEY, updatedHistory)
+    } catch (error) {
+      console.error('Unable to save reading history:', error)
+    }
+
+    navigate(`/reader/${storyId}/${selectedChapter.id}`)
+  }
+
+  // Bookmark status
   const isBookmarked = story
     ? bookmarks.some((item) =>
         typeof item === 'string'
           ? item === String(story.id)
           : String(item.id) === String(story.id)
-      )
-    : false
-
-  // Check whether story is saved offline
-  const isAvailableOffline = story
-    ? offlineStories.some(
-        (item) => String(item.id) === String(story.id)
       )
     : false
 
@@ -203,36 +369,105 @@ export default function Reader() {
           ? 'Removed from your library.'
           : 'Added to your library.'
       )
-    } catch {
+    } catch (error) {
+      console.error(error)
       setMessage('Could not update your library.')
     }
   }
 
-  // Save story for offline access
-  function saveForOffline() {
-    if (!story) return
+  // Add comment
+  async function handleAddComment(event) {
+    event.preventDefault()
+
+    if (!currentUser) {
+      alert('Please log in to comment.')
+      return
+    }
+
+    if (!commentText.trim()) return
 
     try {
-      const nextOfflineStories = [
-        ...offlineStories.filter(
-          (item) => String(item.id) !== String(story.id)
-        ),
-        {
-          ...story,
-          downloadedAt: new Date().toISOString(),
-        },
-      ]
+      setCommentSubmitting(true)
 
-      saveList(OFFLINE_KEY, nextOfflineStories)
-      setOfflineStories(nextOfflineStories)
+      const result = await addComment(storyId, commentText.trim())
 
-      setMessage('Story saved for offline access in this browser.')
-    } catch {
-      setMessage('Could not save this story for offline access.')
+      if (result.success && result.comment) {
+        setComments((previous) => [
+          result.comment,
+          ...previous,
+        ])
+
+        setCommentText('')
+      } else {
+        await loadComments()
+        setCommentText('')
+      }
+    } catch (error) {
+      console.error('Failed to add comment:', error)
+      alert('Unable to add comment. Please try again.')
+    } finally {
+      setCommentSubmitting(false)
     }
   }
 
-  // No story ID
+  // Edit comment
+  async function handleUpdateComment(commentId) {
+    if (!editingCommentText.trim()) return
+
+    try {
+      const result = await updateComment(
+        commentId,
+        editingCommentText.trim()
+      )
+
+      if (result.success) {
+        setComments((previous) =>
+          previous.map((comment) =>
+            String(comment.id) === String(commentId)
+              ? result.comment
+              : comment
+          )
+        )
+
+        setEditingCommentId(null)
+        setEditingCommentText('')
+      }
+    } catch (error) {
+      console.error('Failed to update comment:', error)
+      alert('Unable to update comment.')
+    }
+  }
+
+  // Delete comment
+  async function handleDeleteComment(commentId) {
+    if (!window.confirm('Are you sure you want to delete this comment?')) {
+      return
+    }
+
+    try {
+      const result = await deleteComment(commentId)
+
+      if (result.success) {
+        setComments((previous) =>
+          previous.filter(
+            (comment) => String(comment.id) !== String(commentId)
+          )
+        )
+      }
+    } catch (error) {
+      console.error('Failed to delete comment:', error)
+      alert('Unable to delete comment.')
+    }
+  }
+
+  // Comment ownership
+  function isCommentOwner(comment) {
+    return (
+      currentUser &&
+      String(comment.user_id) === String(currentUser.id)
+    )
+  }
+
   if (!storyId) {
     return (
       <div className={`mx-auto max-w-3xl py-16 text-center ${colors.page}`}>
@@ -243,7 +478,7 @@ export default function Reader() {
         </h1>
 
         <p className={`mt-3 ${colors.muted}`}>
-          Explore Moonlit Pages and find your next favorite story.
+          Explore Moonlit Pages and find your next favourite story.
         </p>
 
         <Link
@@ -256,8 +491,7 @@ export default function Reader() {
     )
   }
 
-  // Loading state
-  if (storyLoading) {
+  if (storyLoading || chaptersLoading) {
     return (
       <div className={`mx-auto max-w-3xl py-16 text-center ${colors.page}`}>
         <p className={`text-lg ${colors.accent}`}>
@@ -267,8 +501,7 @@ export default function Reader() {
     )
   }
 
-  // Error state
-  if (storyError) {
+  if (storyError || !story) {
     return (
       <div className={`mx-auto max-w-3xl py-16 text-center ${colors.page}`}>
         <div className="text-6xl">🌙</div>
@@ -278,38 +511,25 @@ export default function Reader() {
         </h1>
 
         <p className="mt-3 text-red-500">
-          {storyError}
+          {storyError || 'Story not found.'}
         </p>
 
-        <Link
-          to="/explore"
-          className="mt-6 inline-flex rounded-xl bg-violet-600 px-6 py-3 font-semibold text-white transition hover:bg-violet-700"
+        <button
+          type="button"
+          onClick={() => {
+            loadStory()
+            loadChapters()
+          }}
+          className="mt-6 rounded-xl bg-violet-600 px-6 py-3 font-semibold text-white"
         >
-          Back to Explore
-        </Link>
-      </div>
-    )
-  }
-
-  // Story not found
-  if (!story) {
-    return (
-      <div className={`mx-auto max-w-3xl py-16 text-center ${colors.page}`}>
-        <div className="text-6xl">🌙</div>
-
-        <h1 className={`mt-5 text-3xl font-bold ${colors.heading}`}>
-          Story not found
-        </h1>
-
-        <p className={`mt-3 ${colors.muted}`}>
-          This story may have been deleted or is no longer available.
-        </p>
+          Try Again
+        </button>
 
         <Link
-          to="/explore"
-          className="mt-6 inline-flex rounded-xl bg-violet-600 px-6 py-3 font-semibold text-white transition hover:bg-violet-700"
+          to="/library"
+          className={`ml-3 inline-flex rounded-xl border px-6 py-3 font-semibold ${colors.secondaryButton}`}
         >
-          Back to Explore
+          Back to Library
         </Link>
       </div>
     )
@@ -317,7 +537,6 @@ export default function Reader() {
 
   return (
     <div className={`mx-auto w-full min-w-0 max-w-4xl space-y-6 pb-12 ${colors.page}`}>
-
       {/* Navigation */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Link
@@ -335,12 +554,9 @@ export default function Reader() {
         </Link>
       </div>
 
-      {/* Story cover and information */}
+      {/* Story information */}
       <header className={`overflow-hidden rounded-3xl border ${colors.header}`}>
-
-        {/* Cover image */}
         <div className="relative flex min-h-64 items-center justify-center overflow-hidden bg-linear-to-br from-indigo-950 via-violet-900 to-purple-600 px-6 py-12">
-
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_40%,rgba(255,255,255,0.17),transparent_55%)]" />
 
           {story.coverImage ? (
@@ -360,9 +576,7 @@ export default function Reader() {
           </span>
         </div>
 
-        {/* Story details */}
         <div className="p-5 sm:p-8">
-
           <p className={`text-xs font-bold tracking-[0.25em] ${colors.accent}`}>
             MOONLIT PAGES READER
           </p>
@@ -381,88 +595,124 @@ export default function Reader() {
             </p>
           )}
 
-          {/* Bookmark and offline buttons */}
           <div className="mt-6 flex flex-wrap gap-3">
-
             <button
               type="button"
               onClick={toggleBookmark}
               className={`rounded-xl border px-4 py-2.5 text-sm font-semibold transition ${colors.button}`}
             >
-              {isBookmarked
-                ? '♥ Saved to Library'
-                : '♡ Add to Library'}
+              {isBookmarked ? '♥ Saved to Library' : '♡ Add to Library'}
             </button>
-
-            <button
-              type="button"
-              onClick={saveForOffline}
-              className={`rounded-xl border px-4 py-2.5 text-sm font-semibold transition ${colors.secondaryButton}`}
-            >
-              {isAvailableOffline
-                ? '✓ Saved Offline'
-                : '↓ Save Offline'}
-            </button>
-
           </div>
 
           {message && (
-            <p
-              aria-live="polite"
-              className={`mt-4 text-sm font-semibold ${colors.message}`}
-            >
+            <p aria-live="polite" className={`mt-4 text-sm font-semibold ${colors.message}`}>
               {message}
             </p>
           )}
         </div>
       </header>
 
-      {/* Reading content */}
+      {/* Chapter content */}
       <article className={`rounded-3xl border p-5 sm:p-10 ${colors.card}`}>
+        {chapters.length === 0 ? (
+          <div className="py-10 text-center">
+            <div className="mb-4 text-5xl">📚</div>
 
-        {/* Chapter heading */}
-        <div className={`mb-8 border-b pb-5 ${colors.divider}`}>
-          <p className={`text-xs font-bold tracking-[0.2em] ${colors.accent}`}>
-            BEGIN READING
-          </p>
+            <h2 className={`text-2xl font-bold ${colors.heading}`}>
+              No published chapters yet
+            </h2>
 
-          <h2 className={`mt-3 text-2xl font-bold ${colors.heading}`}>
-            {story.chapterTitle || 'Chapter 1'}
-          </h2>
-        </div>
-
-        {/* Main story text */}
-        <div className={`whitespace-pre-wrap wrap-break-word text-base font-normal leading-8 sm:text-lg sm:leading-9 ${colors.content}`}>
-          {story.content?.trim()
-            ? story.content
-            : 'The author has not added any story content yet.'}
-        </div>
-
-        {/* End of story */}
-        <div className={`mt-10 border-t pt-6 ${colors.divider}`}>
-          <p className={`text-center text-sm font-medium ${colors.muted}`}>
-            ✦ End of available content ✦
-          </p>
-
-          <div className="mt-6 flex flex-wrap justify-center gap-3">
-
-            <button
-              type="button"
-              onClick={toggleBookmark}
-              className={`rounded-xl border px-5 py-3 text-sm font-semibold transition ${colors.secondaryButton}`}
-            >
-              {isBookmarked ? '♥ Saved' : '♡ Save this story'}
-            </button>
-
-            <Link
-              to="/explore"
-              className="rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-violet-700"
-            >
-              Discover another story
-            </Link>
-
+            <p className={`mt-3 ${colors.muted}`}>
+              The author has not published any chapters for this story.
+            </p>
           </div>
-        </div>
+        ) : currentChapter ? (
+          <>
+            <div className={`mb-8 border-b pb-5 ${colors.divider}`}>
+              <p className={`text-xs font-bold tracking-[0.2em] ${colors.accent}`}>
+                CHAPTER {currentChapter.chapter_number ?? currentChapterIndex + 1}
+              </p>
+
+              <h2 className={`mt-3 text-2xl font-bold ${colors.heading}`}>
+                {currentChapter.title}
+              </h2>
+
+              <p className={`mt-2 text-sm ${colors.muted}`}>
+                Chapter {currentChapterIndex + 1} of {chapters.length}
+              </p>
+            </div>
+
+            <div className="mb-7">
+              <div className="mb-2 flex justify-between text-xs">
+                <span className={colors.muted}>Reading progress</span>
+
+                <span className={colors.accent}>
+                  {Math.round(
+                    ((currentChapterIndex + 1) / chapters.length) * 100
+                  )}%
+                </span>
+              </div>
+
+              <div className={`h-2 overflow-hidden rounded-full ${isDark ? 'bg-[#493565]' : 'bg-[#E3D2C2]'}`}>
+                <div
+                  className="h-full rounded-full bg-violet-500 transition-all duration-300"
+                  style={{
+                    width: `${((currentChapterIndex + 1) / chapters.length) * 100}%`,
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="mb-8">
+              <label className={`mb-2 block text-sm font-semibold ${colors.heading}`}>
+                Jump to Chapter
+              </label>
+
+              <select
+                value={currentChapterIndex}
+                onChange={(event) =>
+                  saveReadingProgress(Number(event.target.value))
+                }
+                className={`w-full rounded-xl border p-3 outline-none ${
+                  isDark
+                    ? 'border-[#493565] bg-[#10091F] text-white'
+                    : 'border-[#D9C8B8] bg-white text-gray-800'
+                }`}
+              >
+                {chapters.map((chapter, index) => (
+                  <option key={chapter.id} value={index}>
+                    Chapter {chapter.chapter_number ?? index + 1}: {chapter.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className={`whitespace-pre-wrap wrap-break-word text-base leading-8 sm:text-lg sm:leading-9 ${colors.content}`}>
+              {currentChapter.content || 'This chapter has no content.'}
+            </div>
+
+            <div className={`mt-10 flex flex-wrap items-center justify-between gap-3 border-t pt-6 ${colors.divider}`}>
+              <button
+                type="button"
+                onClick={() => saveReadingProgress(currentChapterIndex - 1)}
+                disabled={currentChapterIndex === 0}
+                className={`rounded-xl border px-5 py-3 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${colors.secondaryButton}`}
+              >
+                ← Previous Chapter
+              </button>
+
+              <button
+                type="button"
+                onClick={() => saveReadingProgress(currentChapterIndex + 1)}
+                disabled={currentChapterIndex === chapters.length - 1}
+                className="rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Next Chapter →
+              </button>
+            </div>
+          </>
+        ) : null}
       </article>
 
       {/* Screenshot preference */}
@@ -482,6 +732,134 @@ export default function Reader() {
         </p>
       </div>
 
+      {/* Comments */}
+      <section className={`rounded-3xl border p-5 sm:p-8 ${colors.card}`}>
+        <h2 className={`text-2xl font-bold ${colors.heading}`}>
+          Comments ({comments.length})
+        </h2>
+
+        <form onSubmit={handleAddComment} className="mt-5">
+          <textarea
+            value={commentText}
+            onChange={(event) => setCommentText(event.target.value)}
+            placeholder="Share your thoughts about this story..."
+            maxLength={2000}
+            rows={4}
+            className={`w-full rounded-xl border p-4 outline-none ${
+              isDark
+                ? 'border-[#493565] bg-[#10091F] text-white placeholder:text-gray-400'
+                : 'border-[#D9C8B8] bg-white text-gray-800 placeholder:text-gray-400'
+            }`}
+          />
+
+          <div className="mt-3 flex justify-between gap-3">
+            <span className={`text-xs ${colors.muted}`}>
+              {commentText.length}/2000
+            </span>
+
+            <button
+              type="submit"
+              disabled={commentSubmitting || !commentText.trim()}
+              className="rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-violet-700 disabled:opacity-50"
+            >
+              {commentSubmitting ? 'Posting...' : 'Post Comment'}
+            </button>
+          </div>
+        </form>
+
+        <div className="mt-8 space-y-5">
+          {commentsLoading ? (
+            <p className={colors.muted}>Loading comments...</p>
+          ) : comments.length === 0 ? (
+            <p className={colors.muted}>
+              No comments yet. Be the first to share your thoughts!
+            </p>
+          ) : (
+            comments.map((comment) => (
+              <div
+                key={comment.id}
+                className={`rounded-xl border p-4 ${colors.header}`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p className={`font-semibold ${colors.heading}`}>
+                    {comment.user?.username ||
+                      comment.user?.name ||
+                      'Reader'}
+                  </p>
+
+                  {isCommentOwner(comment) && (
+                    <div className="flex gap-3 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingCommentId(comment.id)
+                          setEditingCommentText(comment.content || '')
+                        }}
+                        className={colors.accent}
+                      >
+                        Edit
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteComment(comment.id)}
+                        className="text-red-500"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {editingCommentId === comment.id ? (
+                  <div className="mt-3">
+                    <textarea
+                      value={editingCommentText}
+                      onChange={(event) =>
+                        setEditingCommentText(event.target.value)
+                      }
+                      maxLength={2000}
+                      rows={3}
+                      className="w-full rounded-lg border border-violet-400 bg-transparent p-3 outline-none"
+                    />
+
+                    <div className="mt-2 flex gap-3">
+                      <button
+                        type="button"
+                        onClick={() => handleUpdateComment(comment.id)}
+                        className="rounded-lg bg-violet-600 px-4 py-2 text-sm text-white"
+                      >
+                        Save
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingCommentId(null)
+                          setEditingCommentText('')
+                        }}
+                        className={`text-sm ${colors.muted}`}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className={`mt-3 whitespace-pre-wrap text-sm leading-7 ${colors.content}`}>
+                    {comment.content}
+                  </p>
+                )}
+
+                <p className={`mt-3 text-xs ${colors.muted}`}>
+                  {comment.created_at
+                    ? new Date(comment.created_at).toLocaleString()
+                    : ''}
+                </p>
+              </div>
+            ))
+          )}
+        </div>
+      </section>
     </div>
   )
 }

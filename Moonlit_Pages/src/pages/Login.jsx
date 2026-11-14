@@ -77,18 +77,17 @@ export default function Login() {
       <section
         className={`relative w-full max-w-sm rounded-2xl border p-5 shadow-xl transition-colors duration-300 sm:p-6 ${colors.card}`}
       >
-        <button
-          type="button"
-          onClick={() => setTheme(isDay ? 'night' : 'day')}
-          aria-label={`Switch to ${isDay ? 'night' : 'day'} mode`}
-          className={`absolute right-4 top-4 rounded-full border px-3 py-2 text-xs font-medium transition hover:scale-105 ${
-            isDay
-              ? 'border-orange-200 bg-orange-50 text-[#70452F] hover:bg-orange-100'
-              : 'border-purple-400/20 bg-purple-500/10 text-purple-200 hover:bg-purple-500/20'
-          }`}
-        >
-          {isDay ? '🌙 Night' : '☀️ Day'}
-        </button>
+      <button
+        type="button"
+        onClick={() => setTheme(isDay ? 'night' : 'day')}
+        className={`absolute right-4 top-4 flex items-center gap-2 rounded-full border px-4 py-2 text-xs font-semibold transition ${
+          isDay
+            ? 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100'
+            : 'border-purple-400/30 bg-purple-500/10 text-purple-200 hover:bg-purple-500/20'
+        }`}
+      >
+        {isDay ? '☀️ Day' : '🌙 Night'}
+      </button>
 
         <Link
           to="/"
@@ -166,15 +165,28 @@ export default function Login() {
               required
               className={`w-full rounded-xl border px-3 py-2.5 text-sm outline-none transition ${colors.input}`}
             />
+
+
           </div>
+          <div className="flex justify-end -mt-2">
+            <Link
+              to="/forgot-password"
+              className={`text-xs font-semibold transition ${colors.link}`}
+            >
+              Forgot Password?
+            </Link>
+          </div>
+          
 
           <button
             type="submit"
             disabled={loading}
             className={`w-full rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-60 ${colors.button}`}
           >
+            
             {loading ? 'Signing in...' : 'Login'}
           </button>
+          
         </form>
 
         <p className={`mt-5 text-center text-sm ${colors.description}`}>
