@@ -191,7 +191,7 @@ export default function Notifications() {
       ['like', 'comment'].includes(notification.type) &&
       notification.storyId
     ) {
-      return `/reader?story=${encodeURIComponent(notification.storyId)}`
+      return `/story/${notification.storyId}`
     }
 
     return null

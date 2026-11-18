@@ -1,4 +1,3 @@
-
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useOutletContext } from 'react-router-dom'
 import { getCurrentUser, logoutUser } from '../utils/auth.js'
@@ -712,12 +711,13 @@ export default function Home() {
                   <span>{featuredStory.chapters} chapters</span>
                 </div>
 
-                <Link
-                  to={`/reader?story=${encodeURIComponent(featuredStory.id)}`}
-                  className={`mt-7 inline-flex rounded-xl px-6 py-3 text-sm font-semibold text-white transition ${colors.primaryButton}`}
-                >
-                  Read Featured Story
-                </Link>
+              <Link
+                to={`/story/${featuredStory.id}`}
+                state={{ story: featuredStory }}
+                className={`mt-7 inline-flex rounded-xl px-6 py-3 text-sm font-semibold text-white transition ${colors.primaryButton}`}
+              >
+                Read Featured Story
+              </Link>
               </div>
 
               {featuredStory.cover_image && (
