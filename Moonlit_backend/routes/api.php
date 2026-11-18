@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\ProfileController;
 use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\ConversationController;
 use App\Http\Controllers\Api\PollController;
+use App\Http\Controllers\Api\UserSafetyController;
 
 Route::get('/test', function () {
     return response()->json([
@@ -48,6 +49,15 @@ Route::prefix('')->group(function () {
         Route::put('/notifications/read-all', [NotificationController::class, 'markAllAsRead']);
         Route::delete('/notifications/{id}', [NotificationController::class, 'destroy']);
         Route::delete('/notifications', [NotificationController::class, 'clearAll']);
+
+        // Block and Report routes
+        Route::post('/users/{userId}/block', [UserSafetyController::class, 'block']);
+
+        Route::delete('/users/{userId}/block', [UserSafetyController::class, 'unblock']);
+
+        Route::get('/users/{userId}/block-status', [UserSafetyController::class, 'blockStatus']);
+
+        Route::post('/users/{userId}/report', [UserSafetyController::class, 'report']);
     });
 
 });

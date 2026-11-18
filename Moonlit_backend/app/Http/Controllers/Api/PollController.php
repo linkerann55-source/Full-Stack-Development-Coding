@@ -5,12 +5,25 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Poll;
 use App\Models\Notification;
+use App\Models\UserBlock;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class PollController extends Controller
 {
-    // Display all polls or filter by username
+    // Check whether either user has blocked the other
+    private function isBlocked(int $userId, int $otherUserId): bool
+    {
+        return UserBlock::where(function ($query) use ($userId, $otherUserId) {
+            $query->where('blocker_id', $userId)
+                ->where('blocked_id', $otherUserId);
+        })->orWhere(function ($query) use ($userId, $otherUserId) {
+            $query->where('blocker_id', $otherUserId)
+                ->where('blocked_id', $userId);
+        })->exists();
+    }
+
+    // Display polls or filter by username
     public function index(Request $request)
     {
         $query = Poll::with([
@@ -22,6 +35,17 @@ class PollController extends Controller
         if ($request->filled('username')) {
             $query->whereHas('user', function ($q) use ($request) {
                 $q->where('username', $request->username);
+            });
+        }
+
+        // Hide polls belonging to users who have blocked each other
+        if ($request->user()) {
+            $currentUserId = $request->user()->id;
+
+            $query->whereDoesntHave('user.blocks', function ($q) use ($currentUserId) {
+                $q->where('blocked_id', $currentUserId);
+            })->whereDoesntHave('user.blockedBy', function ($q) use ($currentUserId) {
+                $q->where('blocker_id', $currentUserId);
             });
         }
 
@@ -71,11 +95,18 @@ class PollController extends Controller
     // Vote or remove an existing vote
     public function vote(Request $request, $id)
     {
+        $poll = Poll::findOrFail($id);
+
+        if ($this->isBlocked($request->user()->id, $poll->user_id)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You cannot vote on this user poll.',
+            ], 403);
+        }
+
         $validated = $request->validate([
             'option_id' => 'required|integer|exists:poll_options,id',
         ]);
-
-        $poll = Poll::findOrFail($id);
 
         $option = $poll->options()
             ->where('id', $validated['option_id'])
@@ -123,11 +154,18 @@ class PollController extends Controller
     {
         $poll = Poll::findOrFail($id);
 
+        if ($this->isBlocked($request->user()->id, $poll->user_id)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You cannot reply to this user poll.',
+            ], 403);
+        }
+
         $validated = $request->validate([
             'text' => 'required|string|max:2000',
         ]);
 
-        $reply = $poll->replies()->create([
+        $poll->replies()->create([
             'user_id' => $request->user()->id,
             'text' => $validated['text'],
         ]);

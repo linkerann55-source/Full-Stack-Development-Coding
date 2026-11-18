@@ -5,11 +5,24 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Conversation;
 use App\Models\Notification;
+use App\Models\UserBlock;
 use Illuminate\Http\Request;
 
 class ConversationController extends Controller
 {
-    // Display all conversations or filter by username
+    // Check whether either user has blocked the other
+    private function isBlocked(int $userId, int $otherUserId): bool
+    {
+        return UserBlock::where(function ($query) use ($userId, $otherUserId) {
+            $query->where('blocker_id', $userId)
+                ->where('blocked_id', $otherUserId);
+        })->orWhere(function ($query) use ($userId, $otherUserId) {
+            $query->where('blocker_id', $otherUserId)
+                ->where('blocked_id', $userId);
+        })->exists();
+    }
+
+    // Display conversations or filter by username
     public function index(Request $request)
     {
         $query = Conversation::with([
@@ -20,6 +33,18 @@ class ConversationController extends Controller
         if ($request->filled('username')) {
             $query->whereHas('user', function ($q) use ($request) {
                 $q->where('username', $request->username);
+            });
+        }
+
+        // Hide conversations from users who have blocked
+        // the logged-in user, or whom the user has blocked.
+        if ($request->user()) {
+            $currentUserId = $request->user()->id;
+
+            $query->whereDoesntHave('user.blocks', function ($q) use ($currentUserId) {
+                $q->where('blocked_id', $currentUserId);
+            })->whereDoesntHave('user.blockedBy', function ($q) use ($currentUserId) {
+                $q->where('blocker_id', $currentUserId);
             });
         }
 
@@ -105,6 +130,16 @@ class ConversationController extends Controller
     public function addReply(Request $request, $id)
     {
         $conversation = Conversation::findOrFail($id);
+
+        if ($this->isBlocked(
+            $request->user()->id,
+            $conversation->user_id
+        )) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You cannot reply to this user conversation.',
+            ], 403);
+        }
 
         $validated = $request->validate([
             'text' => 'required|string|max:2000',

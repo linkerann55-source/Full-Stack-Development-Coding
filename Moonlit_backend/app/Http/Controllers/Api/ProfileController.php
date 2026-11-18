@@ -125,11 +125,11 @@ public function search(Request $request)
     ]);
 }
 
-    // Get a public user's profile by username
+   
+// Get a public user's profile by username
 public function publicShow($username)
 {
-    $user = User::where('username', $username)
-        ->firstOrFail();
+    $user = User::where('username', $username)->firstOrFail();
 
     $user->loadCount(['followers', 'following']);
 
@@ -148,11 +148,18 @@ public function publicShow($username)
                     : url(Storage::url($user->avatar)))
                 : null,
 
+            'cover_photo' => $user->cover_photo
+                ? (filter_var($user->cover_photo, FILTER_VALIDATE_URL)
+                    ? $user->cover_photo
+                    : url(Storage::url($user->cover_photo)))
+                : null,
+
             'followers_count' => $user->followers_count,
             'following_count' => $user->following_count,
         ],
     ]);
 }
+
 
     public function uploadPhotos(Request $request)
     {

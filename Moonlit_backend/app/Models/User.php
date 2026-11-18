@@ -85,4 +85,24 @@ class User extends Authenticatable
     {
         return $this->hasMany(PollVote::class);
     }
+
+    public function blocks(): HasMany
+    {
+        return $this->hasMany(UserBlock::class, 'blocker_id');
+    }
+
+    public function blockedBy(): HasMany
+    {
+        return $this->hasMany(UserBlock::class, 'blocked_id');
+    }
+
+    public function reportsMade(): HasMany
+    {
+        return $this->hasMany(UserReport::class, 'reporter_id');
+    }
+
+    public function reportsReceived(): HasMany
+    {
+        return $this->hasMany(UserReport::class, 'reported_user_id');
+    }
 }

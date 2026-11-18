@@ -10,32 +10,35 @@ use Illuminate\Support\Facades\Auth;
 class StoryController extends Controller
 {
     // Get all published stories
-    public function index(Request $request)
-    {
-        $query = Story::with('user')
-            ->where('status', 'published');
 
-        if ($request->filled('search')) {
-            $search = $request->search;
+public function index(Request $request)
+{
+    $query = Story::with('user:id,name,username,avatar')
+        ->withCount('chapters')
+        ->where('status', 'published');
 
-            $query->where(function ($q) use ($search) {
-                $q->where('title', 'like', "%{$search}%")
-                    ->orWhere('author_name', 'like', "%{$search}%")
-                    ->orWhere('author', 'like', "%{$search}%");
-            });
-        }
+    if ($request->filled('search')) {
+        $search = $request->search;
 
-        if ($request->filled('genre')) {
-            $query->where('genre', $request->genre);
-        }
-
-        $stories = $query->latest()->get();
-
-        return response()->json([
-            'success' => true,
-            'stories' => $stories,
-        ]);
+        $query->where(function ($q) use ($search) {
+            $q->where('title', 'like', "%{$search}%")
+                ->orWhere('author_name', 'like', "%{$search}%")
+                ->orWhere('author', 'like', "%{$search}%");
+        });
     }
+
+    if ($request->filled('genre')) {
+        $query->where('genre', $request->genre);
+    }
+
+    $stories = $query->latest()->get();
+
+    return response()->json([
+        'success' => true,
+        'stories' => $stories,
+    ]);
+}
+
 
     // Get logged-in user's stories
     public function myStories(Request $request)

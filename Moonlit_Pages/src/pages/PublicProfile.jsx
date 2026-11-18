@@ -1,3 +1,4 @@
+
 import { useEffect, useState } from 'react'
 import { Link, useParams, useOutletContext } from 'react-router-dom'
 import api from '../api/axios.js'
@@ -20,24 +21,18 @@ function fixImageUrl(url) {
 
   const cleanUrl = String(url).trim()
 
-  // Base64 image
-  if (cleanUrl.startsWith('data:image/')) {
-    return cleanUrl
-  }
+  if (cleanUrl.startsWith('data:image/')) return cleanUrl
 
-  // Normal image URL
   if (
     cleanUrl.startsWith('http://') ||
     cleanUrl.startsWith('https://')
   ) {
-    return cleanUrl
-      .replace(
-        'http://localhost/storage/',
-        'http://127.0.0.1:8000/storage/',
-      )
+    return cleanUrl.replace(
+      'http://localhost/storage/',
+      'http://127.0.0.1:8000/storage/',
+    )
   }
 
-  // Laravel storage path
   if (cleanUrl.startsWith('/storage/')) {
     return `http://127.0.0.1:8000${cleanUrl}`
   }
@@ -56,9 +51,7 @@ function initials(name) {
 
 function Avatar({ src, username, size = 'h-12 w-12' }) {
   return (
-    <div
-      className={`${size} flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-violet-500 to-indigo-700 font-bold text-white`}
-    >
+    <div className={`${size} flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-violet-500 to-indigo-700 font-bold text-white`}>
       {src ? (
         <img
           src={fixImageUrl(src)}
@@ -111,10 +104,21 @@ export default function PublicProfile() {
   const [replyInputs, setReplyInputs] = useState({})
   const [actionLoading, setActionLoading] = useState({})
 
+  // Block and report states
+  const [blockedByMe, setBlockedByMe] = useState(false)
+  const [blockedMe, setBlockedMe] = useState(false)
+  const [safetyLoading, setSafetyLoading] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [showReportModal, setShowReportModal] = useState(false)
+  const [reportReason, setReportReason] = useState('')
+  const [reportDetails, setReportDetails] = useState('')
+
   const isOwnProfile =
     currentUser?.id &&
     author?.id &&
     Number(currentUser.id) === Number(author.id)
+
+  const isBlocked = blockedByMe || blockedMe
 
   const colors = {
     page: isDark ? 'text-[#F5EFFB]' : 'text-[#49372E]',
@@ -143,9 +147,10 @@ export default function PublicProfile() {
   }
 
   const authorUsername = author?.username || author?.name || ''
+  const authorName = author?.username || author?.name || 'Moonlit Reader'
 
   async function refreshCommunity() {
-    if (!authorUsername) return
+    if (!authorUsername || isBlocked) return
 
     const [conversationData, pollData] = await Promise.all([
       getConversations(authorUsername),
@@ -159,6 +164,15 @@ export default function PublicProfile() {
   async function loadProfile() {
     setLoading(true)
     setMessage('')
+
+    // Reset previous profile state when changing users
+    setBlockedByMe(false)
+    setBlockedMe(false)
+    setFollowing(false)
+    setStories([])
+    setPosts([])
+    setPolls([])
+    setMenuOpen(false)
 
     try {
       const decodedUsername = decodeURIComponent(username || '')
@@ -179,14 +193,16 @@ export default function PublicProfile() {
       const formattedProfile = {
         ...profileData,
         avatar: fixImageUrl(profileData.avatar),
-        cover_photo: fixImageUrl(profileData.cover_photo),
+        cover_photo: fixImageUrl(
+        profileData.cover_photo || profileData.coverPhoto
+      ),
         followers_count: profileData.followers_count || 0,
         following_count: profileData.following_count || 0,
       }
 
       setAuthor(formattedProfile)
 
-      // Get the logged-in user. Guests can still view public profiles.
+      // Get logged-in user
       let loggedInUser = null
 
       try {
@@ -198,10 +214,41 @@ export default function PublicProfile() {
 
       setCurrentUser(loggedInUser)
 
-      // Check follow status.
+      // Check block status
+      let userIsBlocked = false
+
       if (
         loggedInUser?.id &&
         Number(loggedInUser.id) !== Number(profileData.id)
+      ) {
+        try {
+          const response = await api.get(
+            `/users/${profileData.id}/block-status`,
+          )
+
+          const blockedByCurrentUser = Boolean(
+            response.data?.blocked_by_me,
+          )
+
+          const blockedCurrentUser = Boolean(
+            response.data?.blocked_me,
+          )
+
+          setBlockedByMe(blockedByCurrentUser)
+          setBlockedMe(blockedCurrentUser)
+
+          userIsBlocked =
+            blockedByCurrentUser || blockedCurrentUser
+        } catch (error) {
+          console.error('Block status error:', error)
+        }
+      }
+
+      // Check follow status
+      if (
+        loggedInUser?.id &&
+        Number(loggedInUser.id) !== Number(profileData.id) &&
+        !userIsBlocked
       ) {
         try {
           const followStatus = await checkFollow(profileData.id)
@@ -220,7 +267,15 @@ export default function PublicProfile() {
         setFollowing(false)
       }
 
-      // Load this author's published stories.
+      // Do not load public content when either user has blocked the other
+      if (userIsBlocked) {
+        setStories([])
+        setPosts([])
+        setPolls([])
+        return
+      }
+
+      // Load published stories
       try {
         const storyResult = await getStories()
         const allStories = getStoryList(storyResult)
@@ -255,7 +310,7 @@ export default function PublicProfile() {
         setStories([])
       }
 
-      // Load this author's conversations and polls.
+      // Load conversations and polls
       const profileUsername =
         profileData.username || profileData.name || ''
 
@@ -296,10 +351,12 @@ export default function PublicProfile() {
   }, [username])
 
   function requireLogin() {
-    if (currentUser) return true
+    if (!currentUser) {
+      setMessage('Please log in to reply or vote.')
+      return false
+    }
 
-    setMessage('Please log in to reply or vote.')
-    return false
+    return true
   }
 
   function setReplyValue(key, value) {
@@ -312,7 +369,7 @@ export default function PublicProfile() {
   async function handleConversationReply(event, postId) {
     event.preventDefault()
 
-    if (!requireLogin()) return
+    if (!requireLogin() || isBlocked) return
 
     const key = `conversation-${postId}`
     const text = (replyInputs[key] || '').trim()
@@ -339,7 +396,7 @@ export default function PublicProfile() {
   }
 
   async function handlePollVote(pollId, optionId) {
-    if (!requireLogin()) return
+    if (!requireLogin() || isBlocked) return
 
     const key = `vote-${pollId}`
 
@@ -366,7 +423,7 @@ export default function PublicProfile() {
   async function handlePollReply(event, pollId) {
     event.preventDefault()
 
-    if (!requireLogin()) return
+    if (!requireLogin() || isBlocked) return
 
     const key = `poll-reply-${pollId}`
     const text = (replyInputs[key] || '').trim()
@@ -398,7 +455,7 @@ export default function PublicProfile() {
       return
     }
 
-    if (!author?.id || followLoading) return
+    if (!author?.id || followLoading || isBlocked) return
 
     setFollowLoading(true)
     setMessage('')
@@ -435,6 +492,101 @@ export default function PublicProfile() {
       )
     } finally {
       setFollowLoading(false)
+    }
+  }
+
+  // Block or unblock user
+  async function handleBlockToggle() {
+    if (!author?.id || !currentUser || safetyLoading || blockedMe) return
+
+    const action = blockedByMe ? 'unblock' : 'block'
+
+    const confirmed = window.confirm(
+      blockedByMe
+        ? `Unblock ${authorName}?`
+        : `Block ${authorName}? They will no longer be able to interact with you.`,
+    )
+
+    if (!confirmed) return
+
+    setSafetyLoading(true)
+    setMessage('')
+
+    try {
+      if (action === 'block') {
+        await api.post(`/users/${author.id}/block`)
+
+        setBlockedByMe(true)
+        setFollowing(false)
+        setStories([])
+        setPosts([])
+        setPolls([])
+
+        setAuthor((current) => ({
+          ...current,
+          followers_count: Math.max(
+            0,
+            (current.followers_count || 0) - (following ? 1 : 0),
+          ),
+        }))
+
+        setMessage(`You blocked ${authorName}.`)
+      } else {
+        await api.delete(`/users/${author.id}/block`)
+
+        setBlockedByMe(false)
+        setMessage(`You unblocked ${authorName}.`)
+
+        // Reload profile content after unblocking
+        await loadProfile()
+      }
+
+      setMenuOpen(false)
+      window.dispatchEvent(new Event('moonlit-following-updated'))
+    } catch (error) {
+      console.error('Block action error:', error)
+
+      setMessage(
+        error.response?.data?.message ||
+          'Unable to update block status.',
+      )
+    } finally {
+      setSafetyLoading(false)
+    }
+  }
+
+  // Submit report
+  async function handleReportSubmit(event) {
+    event.preventDefault()
+
+    if (!author?.id || !reportReason || safetyLoading) return
+
+    setSafetyLoading(true)
+    setMessage('')
+
+    try {
+      await api.post(`/users/${author.id}/report`, {
+        reason: reportReason,
+        details: reportDetails.trim() || null,
+      })
+
+      setShowReportModal(false)
+      setReportReason('')
+      setReportDetails('')
+      setMenuOpen(false)
+
+      setMessage(
+        'Thank you. Your report has been submitted for review.',
+      )
+    } catch (error) {
+      console.error('Report submission error:', error)
+
+      setMessage(
+        error.response?.data?.message ||
+          'Unable to submit your report.',
+      )
+    } finally {
+      setSafetyLoading(false)
     }
   }
 
@@ -477,11 +629,11 @@ export default function PublicProfile() {
     )
   }
 
-  const authorName = author.username || author.name || 'Moonlit Reader'
-
   return (
     <main className={`min-h-screen px-4 py-8 sm:px-6 lg:px-10 ${colors.page}`}>
       <div className="mx-auto max-w-5xl">
+
+        {/* Page heading */}
         <div className="mb-7">
           <p className={`text-xs font-semibold uppercase tracking-[0.25em] ${colors.accent}`}>
             Moonlit Pages Community
@@ -492,22 +644,25 @@ export default function PublicProfile() {
           </h1>
         </div>
 
+        {/* Feedback message */}
         {message && (
           <div className={`mb-5 rounded-xl border px-4 py-3 text-sm ${colors.panel}`}>
             {message}
           </div>
         )}
 
-        {/* Profile header and cover */}
+        {/* Profile header */}
         <section className={`overflow-hidden rounded-3xl border ${colors.panel}`}>
-          <div
-            className={`h-36 bg-cover bg-center sm:h-48 ${colors.coverBackground}`}
-            style={
-              author.cover_photo
-                ? { backgroundImage: `url("${author.cover_photo}")` }
-                : undefined
-            }
-          />
+        <div
+          className={`h-36 bg-cover bg-center bg-no-repeat sm:h-48 ${colors.coverBackground}`}
+          style={
+            author.cover_photo
+              ? {
+                  backgroundImage: `url("${fixImageUrl(author.cover_photo)}")`,
+                }
+              : undefined
+          }
+        />
 
           <div className="px-5 pb-6 sm:px-8">
             <div className="-mt-14 flex flex-col gap-4 sm:-mt-16 sm:flex-row sm:items-end sm:justify-between">
@@ -531,23 +686,74 @@ export default function PublicProfile() {
                 </div>
               </div>
 
-              {!isOwnProfile && (
-                <button
-                  type="button"
-                  onClick={handleFollow}
-                  disabled={followLoading}
-                  className={`rounded-xl px-5 py-3 text-sm font-semibold transition disabled:opacity-50 ${
-                    following
-                      ? `border ${colors.secondaryButton}`
-                      : colors.primaryButton
-                  }`}
-                >
-                  {followLoading
-                    ? 'Please wait...'
-                    : following
-                      ? 'Following'
-                      : '+ Follow'}
-                </button>
+              {!isOwnProfile && currentUser && (
+                <div className="relative flex items-center gap-2">
+                  {!isBlocked && (
+                    <button
+                      type="button"
+                      onClick={handleFollow}
+                      disabled={followLoading || safetyLoading}
+                      className={`rounded-xl px-5 py-3 text-sm font-semibold transition disabled:opacity-50 ${
+                        following
+                          ? `border ${colors.secondaryButton}`
+                          : colors.primaryButton
+                      }`}
+                    >
+                      {followLoading
+                        ? 'Please wait...'
+                        : following
+                          ? 'Following'
+                          : '+ Follow'}
+                    </button>
+                  )}
+
+                  {isBlocked && (
+                    <span className={`rounded-xl border px-4 py-3 text-sm ${colors.border} ${colors.muted}`}>
+                      {blockedByMe
+                        ? 'You blocked this user'
+                        : 'This user blocked you'}
+                    </span>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => setMenuOpen((current) => !current)}
+                    className={`rounded-xl border px-4 py-3 text-lg font-bold ${colors.secondaryButton}`}
+                    aria-label="Profile options"
+                    aria-expanded={menuOpen}
+                  >
+                    ⋮
+                  </button>
+
+                  {menuOpen && (
+                    <div className={`absolute right-0 top-full z-30 mt-2 w-48 overflow-hidden rounded-xl border shadow-xl ${colors.panel}`}>
+                      <button
+                        type="button"
+                        onClick={handleBlockToggle}
+                        disabled={safetyLoading || blockedMe}
+                        className="block w-full px-4 py-3 text-left text-sm transition hover:bg-black/10 disabled:opacity-50"
+                      >
+                        {safetyLoading
+                          ? 'Please wait...'
+                          : blockedByMe
+                            ? 'Unblock User'
+                            : 'Block User'}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMenuOpen(false)
+                          setShowReportModal(true)
+                        }}
+                        disabled={safetyLoading}
+                        className="block w-full px-4 py-3 text-left text-sm text-red-500 transition hover:bg-black/10 disabled:opacity-50"
+                      >
+                        Report User
+                      </button>
+                    </div>
+                  )}
+                </div>
               )}
 
               {isOwnProfile && (
@@ -570,404 +776,531 @@ export default function PublicProfile() {
 
             <div className="mt-6 flex flex-wrap gap-6">
               <div>
-                <span className="font-bold">
-                  {author.followers_count}
-                </span>{' '}
+                <span className="font-bold">{author.followers_count}</span>{' '}
                 <span className={colors.muted}>Followers</span>
               </div>
 
               <div>
-                <span className="font-bold">
-                  {author.following_count}
-                </span>{' '}
+                <span className="font-bold">{author.following_count}</span>{' '}
                 <span className={colors.muted}>Following</span>
               </div>
             </div>
           </div>
         </section>
 
-        {/* Profile tabs */}
-        <nav className={`mt-7 flex flex-wrap gap-2 border-b pb-3 ${colors.border}`}>
-          {tabs.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => setTab(item.id)}
-              className={`rounded-xl px-4 py-3 text-sm font-semibold transition ${
-                tab === item.id
-                  ? `${colors.primaryButton} shadow-md`
-                  : isDark
-                    ? 'bg-[#25183D] text-purple-100 hover:bg-purple-700 hover:text-white'
-                    : 'bg-[#FFF9F1] text-[#49372E] hover:bg-[#F0E3D4] hover:text-[#89543F]'
-              }`}
-            >
-              {item.label}
-            </button>
-          ))}
-        </nav>
+        {/* Blocked profile notice */}
+        {isBlocked ? (
+          <section className={`mt-7 rounded-2xl border p-8 text-center ${colors.panel}`}>
+            <div className="text-4xl">🔒</div>
 
-        {/* Published stories */}
-        {tab === 'stories' && (
-          <section className={`mt-6 rounded-2xl border p-5 sm:p-6 ${colors.sectionBackground}`}>
-            <div className="mb-5">
-              <h2 className="text-xl font-bold">
-                {authorName}'s Stories
-              </h2>
+            <h2 className="mt-3 text-xl font-bold">
+              {blockedByMe
+                ? 'You have blocked this user'
+                : 'This user has blocked you'}
+            </h2>
 
-              <p className={`mt-1 text-sm ${colors.muted}`}>
-                Published stories by this author.
-              </p>
-            </div>
+            <p className={`mt-2 text-sm ${colors.muted}`}>
+              {blockedByMe
+                ? 'You cannot view or interact with this user’s community content while they are blocked.'
+                : 'You cannot view or interact with this user’s community content.'}
+            </p>
 
-            {stories.length === 0 ? (
-              <div className={`rounded-xl border border-dashed p-8 text-center ${colors.border}`}>
-                <div className="text-4xl">📚</div>
+            {blockedByMe && (
+              <button
+                type="button"
+                onClick={handleBlockToggle}
+                disabled={safetyLoading}
+                className={`mt-5 rounded-xl px-5 py-3 text-sm font-semibold disabled:opacity-50 ${colors.primaryButton}`}
+              >
+                {safetyLoading ? 'Please wait...' : 'Unblock User'}
+              </button>
+            )}
+          </section>
+        ) : (
+          <>
+            {/* Profile tabs */}
+            <nav className={`mt-7 flex flex-wrap gap-2 border-b pb-3 ${colors.border}`}>
+              {tabs.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setTab(item.id)}
+                  className={`rounded-xl px-4 py-3 text-sm font-semibold transition ${
+                    tab === item.id
+                      ? `${colors.primaryButton} shadow-md`
+                      : isDark
+                        ? 'bg-[#25183D] text-purple-100 hover:bg-purple-700 hover:text-white'
+                        : 'bg-[#FFF9F1] text-[#49372E] hover:bg-[#F0E3D4] hover:text-[#89543F]'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </nav>
 
-                <h3 className="mt-3 font-bold">
-                  No published stories yet.
-                </h3>
+            {/* Published stories */}
+            {tab === 'stories' && (
+              <section className={`mt-6 rounded-2xl border p-5 sm:p-6 ${colors.sectionBackground}`}>
+                <div className="mb-5">
+                  <h2 className="text-xl font-bold">
+                    {authorName}'s Stories
+                  </h2>
 
-                <p className={`mt-2 text-sm ${colors.muted}`}>
-                  This author has not published any stories.
-                </p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                {stories.map((story) => (
-                  <article
-                    key={story.id}
-                    className={`overflow-hidden rounded-xl border ${colors.border}`}
-                  >
-                    {story.cover_image || story.coverImage ? (
-                      <img
-                        src={fixImageUrl(story.cover_image || story.coverImage)}
-                        alt={`${story.title} cover`}
-                        className="h-36 w-full object-cover"
-                      />
-                    ) : (
-                      <div className="flex h-36 items-center justify-center bg-gradient-to-br from-indigo-950 to-purple-800 text-4xl text-white">
-                        ✦
-                      </div>
-                    )}
+                  <p className={`mt-1 text-sm ${colors.muted}`}>
+                    Published stories by this author.
+                  </p>
+                </div>
 
-                    <div className="p-4">
-                      <h3 className="truncate font-bold">
-                        {story.title}
-                      </h3>
+                {stories.length === 0 ? (
+                  <div className={`rounded-xl border border-dashed p-8 text-center ${colors.border}`}>
+                    <div className="text-4xl">📚</div>
 
-                      <p className={`mt-1 text-xs ${colors.muted}`}>
-                        {story.genre || 'Uncategorized'}
-                      </p>
+                    <h3 className="mt-3 font-bold">
+                      No published stories yet.
+                    </h3>
 
-                      <p className={`mt-2 line-clamp-2 text-sm ${colors.muted}`}>
-                        {story.description || 'No description available.'}
-                      </p>
-
-                      <Link
-                        to={`/reader/${story.id}`}
-                        className={`mt-4 inline-block rounded-lg px-4 py-2 text-sm font-semibold ${colors.primaryButton}`}
+                    <p className={`mt-2 text-sm ${colors.muted}`}>
+                      This author has not published any stories.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                    {stories.map((story) => (
+                      <article
+                        key={story.id}
+                        className={`overflow-hidden rounded-xl border ${colors.border}`}
                       >
-                        Read Story
-                      </Link>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            )}
-          </section>
-        )}
-
-        {/* Conversations */}
-        {tab === 'conversations' && (
-          <section className="mt-6 space-y-5">
-            {posts.length === 0 && (
-              <div className={`rounded-2xl border border-dashed p-10 text-center ${colors.border}`}>
-                <div className="text-4xl">💬</div>
-
-                <h3 className="mt-3 text-lg font-bold">
-                  No conversations yet
-                </h3>
-
-                <p className={`mt-2 text-sm ${colors.muted}`}>
-                  This reader has not shared any conversations.
-                </p>
-              </div>
-            )}
-
-            {posts.map((post) => {
-              const replyKey = `conversation-${post.id}`
-
-              return (
-                <article
-                  key={post.id}
-                  className={`rounded-2xl border p-5 sm:p-6 ${colors.panel}`}
-                >
-                  <div className="flex items-start gap-3">
-                    <Avatar
-                      src={post.avatar || author.avatar}
-                      username={post.username || authorName}
-                    />
-
-                    <div className="min-w-0 flex-1">
-                      <p className="font-semibold">
-                        {post.username || authorName}
-                      </p>
-
-                      <p className={`text-xs ${colors.muted}`}>
-                        {formatDate(post.createdAt || post.created_at)}
-                        {post.updatedAt &&
-                        post.createdAt &&
-                        new Date(post.updatedAt).getTime() -
-                          new Date(post.createdAt).getTime() > 1000
-                          ? ' · Edited'
-                          : ''}
-                      </p>
-
-                      <p className="mt-4 whitespace-pre-wrap break-words leading-7">
-                        {post.text}
-                      </p>
-
-                      <div className={`mt-5 border-t pt-4 ${colors.border}`}>
-                        <p className={`mb-3 text-sm font-semibold ${colors.muted}`}>
-                          Replies ({post.replies?.length || 0})
-                        </p>
-
-                        <div className="space-y-3">
-                          {(post.replies || []).map((reply) => (
-                            <div key={reply.id} className="flex gap-2">
-                              <Avatar
-                                src={reply.avatar}
-                                username={reply.username}
-                                size="h-8 w-8"
-                              />
-
-                              <div className={`min-w-0 flex-1 rounded-xl px-3 py-2 ${colors.softBackground}`}>
-                                <p className="text-sm font-semibold">
-                                  {reply.username}
-                                </p>
-
-                                <p className="mt-1 break-words text-sm">
-                                  {reply.text}
-                                </p>
-
-                                <p className={`mt-1 text-xs ${colors.muted}`}>
-                                  {formatDate(reply.createdAt || reply.created_at)}
-                                </p>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-
-                        <form
-                          onSubmit={(event) =>
-                            handleConversationReply(event, post.id)
-                          }
-                          className="mt-4 flex flex-col gap-2 sm:flex-row"
-                        >
-                          <input
-                            type="text"
-                            value={replyInputs[replyKey] || ''}
-                            onChange={(event) =>
-                              setReplyValue(replyKey, event.target.value)
-                            }
-                            placeholder="Write a reply..."
-                            maxLength={1000}
-                            className={`min-w-0 flex-1 rounded-xl border px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-violet-500 ${colors.input}`}
+                        {story.cover_image || story.coverImage ? (
+                          <img
+                            src={fixImageUrl(story.cover_image || story.coverImage)}
+                            alt={`${story.title} cover`}
+                            className="h-36 w-full object-cover"
                           />
+                        ) : (
+                          <div className="flex h-36 items-center justify-center bg-gradient-to-br from-indigo-950 to-purple-800 text-4xl text-white">
+                            ✦
+                          </div>
+                        )}
 
-                          <button
-                            type="submit"
-                            disabled={
-                              !replyInputs[replyKey]?.trim() ||
-                              actionLoading[replyKey]
-                            }
-                            className={`${buttonClass} disabled:cursor-not-allowed disabled:opacity-50`}
+                        <div className="p-4">
+                          <h3 className="truncate font-bold">
+                            {story.title}
+                          </h3>
+
+                          <p className={`mt-1 text-xs ${colors.muted}`}>
+                            {story.genre || 'Uncategorized'}
+                          </p>
+
+                          <p className={`mt-2 line-clamp-2 text-sm ${colors.muted}`}>
+                            {story.description || 'No description available.'}
+                          </p>
+
+                          <Link
+                            to={`/reader/${story.id}`}
+                            className={`mt-4 inline-block rounded-lg px-4 py-2 text-sm font-semibold ${colors.primaryButton}`}
                           >
-                            {actionLoading[replyKey] ? 'Sending...' : 'Reply'}
-                          </button>
-                        </form>
-                      </div>
-                    </div>
+                            Read Story
+                          </Link>
+                        </div>
+                      </article>
+                    ))}
                   </div>
-                </article>
-              )
-            })}
-          </section>
-        )}
-
-        {/* Polls */}
-        {tab === 'polls' && (
-          <section className="mt-6 space-y-5">
-            <div className={`rounded-2xl border p-5 ${colors.panel}`}>
-              <h2 className="text-xl font-bold">
-                {authorName}'s Polls
-              </h2>
-
-              <p className={`mt-1 text-sm ${colors.muted}`}>
-                Polls created by this reader.
-              </p>
-            </div>
-
-            {polls.length === 0 && (
-              <div className={`rounded-2xl border border-dashed p-10 text-center ${colors.border}`}>
-                <div className="text-4xl">📊</div>
-
-                <h3 className="mt-3 text-lg font-bold">
-                  No polls yet
-                </h3>
-
-                <p className={`mt-2 text-sm ${colors.muted}`}>
-                  This reader has not created any polls.
-                </p>
-              </div>
+                )}
+              </section>
             )}
 
-            {polls.map((poll) => {
-              const options = poll.options || []
-              const replyKey = `poll-reply-${poll.id}`
-              const voteKey = `vote-${poll.id}`
+            {/* Conversations */}
+            {tab === 'conversations' && (
+              <section className="mt-6 space-y-5">
+                {posts.length === 0 && (
+                  <div className={`rounded-2xl border border-dashed p-10 text-center ${colors.border}`}>
+                    <div className="text-4xl">💬</div>
 
-              const totalVotes = options.reduce(
-                (total, option) => total + (option.votes || []).length,
-                0,
-              )
+                    <h3 className="mt-3 text-lg font-bold">
+                      No conversations yet
+                    </h3>
 
-              return (
-                <article
-                  key={poll.id}
-                  className={`rounded-2xl border p-5 sm:p-6 ${colors.panel}`}
-                >
-                  <div className="flex items-start gap-3">
-                    <Avatar
-                      src={poll.avatar || author.avatar}
-                      username={poll.username || authorName}
-                    />
+                    <p className={`mt-2 text-sm ${colors.muted}`}>
+                      This reader has not shared any conversations.
+                    </p>
+                  </div>
+                )}
 
-                    <div className="min-w-0 flex-1">
-                      <p className="font-semibold">
-                        {poll.username || authorName}
-                      </p>
+                {posts.map((post) => {
+                  const replyKey = `conversation-${post.id}`
 
-                      <p className={`text-xs ${colors.muted}`}>
-                        {formatDate(poll.createdAt || poll.created_at)}
-                      </p>
+                  return (
+                    <article
+                      key={post.id}
+                      className={`rounded-2xl border p-5 sm:p-6 ${colors.panel}`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <Avatar
+                          src={post.avatar || author.avatar}
+                          username={post.username || authorName}
+                        />
 
-                      <h3 className="mt-4 text-lg font-bold">
-                        {poll.question}
-                      </h3>
+                        <div className="min-w-0 flex-1">
+                          <p className="font-semibold">
+                            {post.username || authorName}
+                          </p>
 
-                      <p className={`mt-1 text-xs ${colors.muted}`}>
-                        {totalVotes} {totalVotes === 1 ? 'vote' : 'votes'}
-                      </p>
+                          <p className={`text-xs ${colors.muted}`}>
+                            {formatDate(post.createdAt || post.created_at)}
+                            {post.updatedAt &&
+                            post.createdAt &&
+                            new Date(post.updatedAt).getTime() -
+                              new Date(post.createdAt).getTime() > 1000
+                              ? ' · Edited'
+                              : ''}
+                          </p>
 
-                      <div className="mt-4 space-y-3">
-                        {options.map((option) => {
-                          const votes = (option.votes || []).length
+                          <p className="mt-4 whitespace-pre-wrap break-words leading-7">
+                            {post.text}
+                          </p>
 
-                          const percentage = totalVotes
-                            ? Math.round((votes / totalVotes) * 100)
-                            : 0
+                          <div className={`mt-5 border-t pt-4 ${colors.border}`}>
+                            <p className={`mb-3 text-sm font-semibold ${colors.muted}`}>
+                              Replies ({post.replies?.length || 0})
+                            </p>
 
-                          return (
-                            <div
-                              key={option.id}
-                              className={`relative w-full overflow-hidden rounded-xl border p-3 ${colors.border}`}
+                            <div className="space-y-3">
+                              {(post.replies || []).map((reply) => (
+                                <div key={reply.id} className="flex gap-2">
+                                  <Avatar
+                                    src={reply.avatar}
+                                    username={reply.username}
+                                    size="h-8 w-8"
+                                  />
+
+                                  <div className={`min-w-0 flex-1 rounded-xl px-3 py-2 ${colors.softBackground}`}>
+                                    <p className="text-sm font-semibold">
+                                      {reply.username}
+                                    </p>
+
+                                    <p className="mt-1 break-words text-sm">
+                                      {reply.text}
+                                    </p>
+
+                                    <p className={`mt-1 text-xs ${colors.muted}`}>
+                                      {formatDate(reply.createdAt || reply.created_at)}
+                                    </p>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+
+                            <form
+                              onSubmit={(event) =>
+                                handleConversationReply(event, post.id)
+                              }
+                              className="mt-4 flex flex-col gap-2 sm:flex-row"
                             >
-                              <span
-                                className={`absolute inset-y-0 left-0 ${
-                                  isDark ? 'bg-[#49336F]' : 'bg-[#EAD9C7]'
-                                }`}
-                                style={{ width: `${percentage}%` }}
+                              <input
+                                type="text"
+                                value={replyInputs[replyKey] || ''}
+                                onChange={(event) =>
+                                  setReplyValue(replyKey, event.target.value)
+                                }
+                                placeholder="Write a reply..."
+                                maxLength={1000}
+                                className={`min-w-0 flex-1 rounded-xl border px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-violet-500 ${colors.input}`}
                               />
 
-                              <span className="relative flex flex-wrap items-center justify-between gap-3">
-                                <span className="break-words text-sm font-medium">
-                                  {option.text}
-                                </span>
+                              <button
+                                type="submit"
+                                disabled={
+                                  !replyInputs[replyKey]?.trim() ||
+                                  actionLoading[replyKey]
+                                }
+                                className={`${buttonClass} disabled:cursor-not-allowed disabled:opacity-50`}
+                              >
+                                {actionLoading[replyKey] ? 'Sending...' : 'Reply'}
+                              </button>
+                            </form>
+                          </div>
+                        </div>
+                      </div>
+                    </article>
+                  )
+                })}
+              </section>
+            )}
 
-                                <span className="flex shrink-0 items-center gap-3">
-                                  <span className="text-xs font-semibold">
-                                    {percentage}%
+            {/* Polls */}
+            {tab === 'polls' && (
+              <section className="mt-6 space-y-5">
+                <div className={`rounded-2xl border p-5 ${colors.panel}`}>
+                  <h2 className="text-xl font-bold">
+                    {authorName}'s Polls
+                  </h2>
+
+                  <p className={`mt-1 text-sm ${colors.muted}`}>
+                    Polls created by this reader.
+                  </p>
+                </div>
+
+                {polls.length === 0 && (
+                  <div className={`rounded-2xl border border-dashed p-10 text-center ${colors.border}`}>
+                    <div className="text-4xl">📊</div>
+
+                    <h3 className="mt-3 text-lg font-bold">
+                      No polls yet
+                    </h3>
+
+                    <p className={`mt-2 text-sm ${colors.muted}`}>
+                      This reader has not created any polls.
+                    </p>
+                  </div>
+                )}
+
+                {polls.map((poll) => {
+                  const options = poll.options || []
+                  const replyKey = `poll-reply-${poll.id}`
+                  const voteKey = `vote-${poll.id}`
+
+                  const totalVotes = options.reduce(
+                    (total, option) => total + (option.votes || []).length,
+                    0,
+                  )
+
+                  return (
+                    <article
+                      key={poll.id}
+                      className={`rounded-2xl border p-5 sm:p-6 ${colors.panel}`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <Avatar
+                          src={poll.avatar || author.avatar}
+                          username={poll.username || authorName}
+                        />
+
+                        <div className="min-w-0 flex-1">
+                          <p className="font-semibold">
+                            {poll.username || authorName}
+                          </p>
+
+                          <p className={`text-xs ${colors.muted}`}>
+                            {formatDate(poll.createdAt || poll.created_at)}
+                          </p>
+
+                          <h3 className="mt-4 text-lg font-bold">
+                            {poll.question}
+                          </h3>
+
+                          <p className={`mt-1 text-xs ${colors.muted}`}>
+                            {totalVotes} {totalVotes === 1 ? 'vote' : 'votes'}
+                          </p>
+
+                          <div className="mt-4 space-y-3">
+                            {options.map((option) => {
+                              const votes = (option.votes || []).length
+
+                              const percentage = totalVotes
+                                ? Math.round((votes / totalVotes) * 100)
+                                : 0
+
+                              return (
+                                <div
+                                  key={option.id}
+                                  className={`relative w-full overflow-hidden rounded-xl border p-3 ${colors.border}`}
+                                >
+                                  <span
+                                    className={`absolute inset-y-0 left-0 ${
+                                      isDark ? 'bg-[#49336F]' : 'bg-[#EAD9C7]'
+                                    }`}
+                                    style={{ width: `${percentage}%` }}
+                                  />
+
+                                  <span className="relative flex flex-wrap items-center justify-between gap-3">
+                                    <span className="break-words text-sm font-medium">
+                                      {option.text}
+                                    </span>
+
+                                    <span className="flex shrink-0 items-center gap-3">
+                                      <span className="text-xs font-semibold">
+                                        {percentage}%
+                                      </span>
+
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handlePollVote(poll.id, option.id)
+                                        }
+                                        disabled={actionLoading[voteKey]}
+                                        className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition disabled:opacity-50 ${colors.primaryButton}`}
+                                      >
+                                        {actionLoading[voteKey] ? 'Please wait...' : 'Vote'}
+                                      </button>
+                                    </span>
                                   </span>
+                                </div>
+                              )
+                            })}
+                          </div>
 
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      handlePollVote(poll.id, option.id)
-                                    }
-                                    disabled={actionLoading[voteKey]}
-                                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition disabled:opacity-50 ${colors.primaryButton}`}
-                                  >
-                                    {actionLoading[voteKey] ? 'Please wait...' : 'Vote'}
-                                  </button>
-                                </span>
-                              </span>
+                          <div className={`mt-5 border-t pt-4 ${colors.border}`}>
+                            <p className={`mb-3 text-sm font-semibold ${colors.muted}`}>
+                              Replies ({poll.replies?.length || 0})
+                            </p>
+
+                            <div className="space-y-3">
+                              {(poll.replies || []).map((reply) => (
+                                <div
+                                  key={reply.id}
+                                  className={`rounded-xl px-3 py-2 ${colors.softBackground}`}
+                                >
+                                  <p className="text-sm font-semibold">
+                                    {reply.username}
+                                  </p>
+
+                                  <p className="mt-1 break-words text-sm">
+                                    {reply.text}
+                                  </p>
+
+                                  <p className={`mt-1 text-xs ${colors.muted}`}>
+                                    {formatDate(reply.createdAt || reply.created_at)}
+                                  </p>
+                                </div>
+                              ))}
                             </div>
-                          )
-                        })}
-                      </div>
 
-                      <div className={`mt-5 border-t pt-4 ${colors.border}`}>
-                        <p className={`mb-3 text-sm font-semibold ${colors.muted}`}>
-                          Replies ({poll.replies?.length || 0})
-                        </p>
-
-                        <div className="space-y-3">
-                          {(poll.replies || []).map((reply) => (
-                            <div
-                              key={reply.id}
-                              className={`rounded-xl px-3 py-2 ${colors.softBackground}`}
+                            <form
+                              onSubmit={(event) =>
+                                handlePollReply(event, poll.id)
+                              }
+                              className="mt-4 flex flex-col gap-2 sm:flex-row"
                             >
-                              <p className="text-sm font-semibold">
-                                {reply.username}
-                              </p>
+                              <input
+                                type="text"
+                                value={replyInputs[replyKey] || ''}
+                                onChange={(event) =>
+                                  setReplyValue(replyKey, event.target.value)
+                                }
+                                placeholder="Write a reply..."
+                                maxLength={1000}
+                                className={`min-w-0 flex-1 rounded-xl border px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-violet-500 ${colors.input}`}
+                              />
 
-                              <p className="mt-1 break-words text-sm">
-                                {reply.text}
-                              </p>
-
-                              <p className={`mt-1 text-xs ${colors.muted}`}>
-                                {formatDate(reply.createdAt || reply.created_at)}
-                              </p>
-                            </div>
-                          ))}
+                              <button
+                                type="submit"
+                                disabled={
+                                  !replyInputs[replyKey]?.trim() ||
+                                  actionLoading[replyKey]
+                                }
+                                className={`${buttonClass} disabled:cursor-not-allowed disabled:opacity-50`}
+                              >
+                                {actionLoading[replyKey] ? 'Sending...' : 'Reply'}
+                              </button>
+                            </form>
+                          </div>
                         </div>
-
-                        <form
-                          onSubmit={(event) =>
-                            handlePollReply(event, poll.id)
-                          }
-                          className="mt-4 flex flex-col gap-2 sm:flex-row"
-                        >
-                          <input
-                            type="text"
-                            value={replyInputs[replyKey] || ''}
-                            onChange={(event) =>
-                              setReplyValue(replyKey, event.target.value)
-                            }
-                            placeholder="Write a reply..."
-                            maxLength={1000}
-                            className={`min-w-0 flex-1 rounded-xl border px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-violet-500 ${colors.input}`}
-                          />
-
-                          <button
-                            type="submit"
-                            disabled={
-                              !replyInputs[replyKey]?.trim() ||
-                              actionLoading[replyKey]
-                            }
-                            className={`${buttonClass} disabled:cursor-not-allowed disabled:opacity-50`}
-                          >
-                            {actionLoading[replyKey] ? 'Sending...' : 'Reply'}
-                          </button>
-                        </form>
                       </div>
-                    </div>
-                  </div>
-                </article>
-              )
-            })}
-          </section>
+                    </article>
+                  )
+                })}
+              </section>
+            )}
+          </>
+        )}
+
+        {/* Report User Modal */}
+        {showReportModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 py-6">
+            <div className={`w-full max-w-md rounded-2xl border p-6 shadow-2xl ${colors.panel}`}>
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-bold">
+                  Report User
+                </h2>
+
+                <button
+                  type="button"
+                  onClick={() => setShowReportModal(false)}
+                  className={`text-2xl ${colors.muted}`}
+                  aria-label="Close report form"
+                >
+                  ×
+                </button>
+              </div>
+
+              <p className={`mt-2 text-sm ${colors.muted}`}>
+                Report @{authorName} for inappropriate behaviour.
+              </p>
+
+              <form
+                onSubmit={handleReportSubmit}
+                className="mt-5 space-y-4"
+              >
+                <div>
+                  <label className="mb-2 block text-sm font-semibold">
+                    Reason for reporting
+                  </label>
+
+                  <select
+                    value={reportReason}
+                    onChange={(event) =>
+                      setReportReason(event.target.value)
+                    }
+                    required
+                    className={`w-full rounded-xl border px-4 py-3 outline-none ${colors.input}`}
+                  >
+                    <option value="">Select a reason</option>
+                    <option value="Harassment or bullying">
+                      Harassment or bullying
+                    </option>
+                    <option value="Hate speech">Hate speech</option>
+                    <option value="Spam or fake account">
+                      Spam or fake account
+                    </option>
+                    <option value="Inappropriate content">
+                      Inappropriate content
+                    </option>
+                    <option value="Impersonation">Impersonation</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-semibold">
+                    Additional details (optional)
+                  </label>
+
+                  <textarea
+                    value={reportDetails}
+                    onChange={(event) =>
+                      setReportDetails(event.target.value)
+                    }
+                    rows={4}
+                    maxLength={2000}
+                    placeholder="Explain why you are reporting this user..."
+                    className={`w-full resize-none rounded-xl border px-4 py-3 outline-none focus:ring-2 focus:ring-violet-500 ${colors.input}`}
+                  />
+
+                  <p className={`mt-1 text-right text-xs ${colors.muted}`}>
+                    {reportDetails.length}/2000
+                  </p>
+                </div>
+
+                <div className="flex justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowReportModal(false)}
+                    className={`rounded-xl border px-4 py-3 text-sm font-semibold ${colors.secondaryButton}`}
+                  >
+                    Cancel
+                  </button>
+
+                  <button
+                    type="submit"
+                    disabled={!reportReason || safetyLoading}
+                    className="rounded-xl bg-red-600 px-5 py-3 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                  >
+                    {safetyLoading ? 'Submitting...' : 'Submit Report'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
         )}
       </div>
     </main>

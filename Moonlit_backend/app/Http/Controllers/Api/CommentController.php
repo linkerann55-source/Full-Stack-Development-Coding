@@ -6,10 +6,23 @@ use App\Http\Controllers\Controller;
 use App\Models\Story;
 use App\Models\Comment;
 use App\Models\Notification;
+use App\Models\UserBlock;
 use Illuminate\Http\Request;
 
 class CommentController extends Controller
 {
+    // Check whether either user has blocked the other
+    private function isBlocked(int $userId, int $otherUserId): bool
+    {
+        return UserBlock::where(function ($query) use ($userId, $otherUserId) {
+            $query->where('blocker_id', $userId)
+                ->where('blocked_id', $otherUserId);
+        })->orWhere(function ($query) use ($userId, $otherUserId) {
+            $query->where('blocker_id', $otherUserId)
+                ->where('blocked_id', $userId);
+        })->exists();
+    }
+
     // Get comments for a story
     public function index($storyId)
     {
@@ -33,6 +46,13 @@ class CommentController extends Controller
         $story = Story::where('status', 'published')
             ->findOrFail($storyId);
 
+        if ($this->isBlocked($request->user()->id, $story->user_id)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You cannot comment on this user story.',
+            ], 403);
+        }
+
         $validated = $request->validate([
             'content' => 'required|string|max:2000',
         ]);
@@ -44,7 +64,7 @@ class CommentController extends Controller
 
         $comment->load('user:id,name,username,avatar');
 
-        // Notify the story owner about the new comment
+        // Notify the story owner
         if ($story->user_id !== $request->user()->id) {
             Notification::create([
                 'user_id' => $story->user_id,
@@ -67,6 +87,16 @@ class CommentController extends Controller
     {
         $comment = Comment::where('user_id', $request->user()->id)
             ->findOrFail($commentId);
+
+        if ($this->isBlocked(
+            $request->user()->id,
+            $comment->story->user_id
+        )) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You cannot interact with this user story.',
+            ], 403);
+        }
 
         $validated = $request->validate([
             'content' => 'required|string|max:2000',

@@ -8,21 +8,41 @@ use App\Models\User;
 use App\Models\Like;
 use App\Models\Follow;
 use App\Models\Notification;
+use App\Models\UserBlock;
 use Illuminate\Http\Request;
 
 class SocialController extends Controller
 {
+    // Check whether either user has blocked the other
+    private function isBlocked(int $userId, int $otherUserId): bool
+    {
+        return UserBlock::where(function ($query) use ($userId, $otherUserId) {
+            $query->where('blocker_id', $userId)
+                ->where('blocked_id', $otherUserId);
+        })->orWhere(function ($query) use ($userId, $otherUserId) {
+            $query->where('blocker_id', $otherUserId)
+                ->where('blocked_id', $userId);
+        })->exists();
+    }
+
+    // Like a story
     public function like(Request $request, $storyId)
     {
         $story = Story::where('status', 'published')
             ->findOrFail($storyId);
+
+        if ($this->isBlocked($request->user()->id, $story->user_id)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You cannot interact with this user.',
+            ], 403);
+        }
 
         $like = Like::firstOrCreate([
             'story_id' => $story->id,
             'user_id' => $request->user()->id,
         ]);
 
-        // Notify the story owner only when a new like is created
         if (
             $like->wasRecentlyCreated &&
             $story->user_id !== $request->user()->id
@@ -60,6 +80,7 @@ class SocialController extends Controller
         ]);
     }
 
+    // Follow a user
     public function follow(Request $request, $userId)
     {
         $user = User::findOrFail($userId);
@@ -71,12 +92,18 @@ class SocialController extends Controller
             ], 422);
         }
 
+        if ($this->isBlocked($request->user()->id, $user->id)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You cannot follow this user.',
+            ], 403);
+        }
+
         $follow = Follow::firstOrCreate([
             'follower_id' => $request->user()->id,
             'following_id' => $user->id,
         ]);
 
-        // Notify only when a new follow is created
         if ($follow->wasRecentlyCreated) {
             Notification::create([
                 'user_id' => $user->id,
@@ -94,7 +121,7 @@ class SocialController extends Controller
         ]);
     }
 
-    // Unfollow an author
+    // Unfollow a user
     public function unfollow(Request $request, $userId)
     {
         $user = User::findOrFail($userId);
@@ -110,7 +137,7 @@ class SocialController extends Controller
         ]);
     }
 
-    // Get an author's followers
+    // Get followers
     public function followers($userId)
     {
         $user = User::findOrFail($userId);
@@ -127,7 +154,7 @@ class SocialController extends Controller
         ]);
     }
 
-    // Get an author's following list
+    // Get following
     public function following($userId)
     {
         $user = User::findOrFail($userId);
@@ -157,17 +184,27 @@ class SocialController extends Controller
         ]);
     }
 
-    // Check whether the logged-in user follows an author
+    // Check whether the logged-in user follows a user
     public function checkFollow(Request $request, $userId)
     {
-        $following = Follow::where(
-            'follower_id',
-            $request->user()->id
-        )->where('following_id', $userId)->exists();
+        $isBlocked = $this->isBlocked(
+            $request->user()->id,
+            (int) $userId
+        );
+
+        $following = false;
+
+        if (!$isBlocked) {
+            $following = Follow::where(
+                'follower_id',
+                $request->user()->id
+            )->where('following_id', $userId)->exists();
+        }
 
         return response()->json([
             'success' => true,
             'following' => $following,
+            'blocked' => $isBlocked,
         ]);
     }
 }
