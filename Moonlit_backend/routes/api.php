@@ -32,6 +32,7 @@ Route::prefix('')->group(function () {
     // Public authentication routes
     Route::post('/register', [AuthController::class, 'register']);
     Route::post('/login', [AuthController::class, 'login']);
+    Route::post('/admin/login', [AuthController::class, 'adminLogin']);
     Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
     Route::post('/reset-password', [AuthController::class, 'resetPassword']);
 
@@ -140,4 +141,16 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/polls/{id}/vote', [PollController::class, 'vote']);
     Route::post('/polls/{id}/replies', [PollController::class, 'addReply']);
     Route::delete('/polls/{id}', [PollController::class, 'destroy']);
+});
+
+// Admin protected routes
+Route::prefix('admin')->middleware('admin.auth')->group(function () {
+
+    Route::get('/dashboard', function () {
+        return response()->json([
+            'success' => true,
+            'message' => 'Admin access granted!',
+        ]);
+    });
+
 });

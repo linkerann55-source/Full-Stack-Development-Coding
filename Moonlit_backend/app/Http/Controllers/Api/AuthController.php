@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use Illuminate\Support\Facades\Crypt;
 
 class AuthController extends Controller
 {
@@ -77,29 +78,60 @@ class AuthController extends Controller
         ]);
     }
 
-    // Forgot Password
-    public function forgotPassword(Request $request)
-    {
-        $request->validate([
-            'email' => 'required|email',
-        ]);
 
-        $status = Password::sendResetLink(
-            $request->only('email')
-        );
+// Admin Login - Fixed credentials, no database account
+public function adminLogin(Request $request)
+{
+    $request->validate([
+        'email' => 'required|email',
+        'password' => 'required|string',
+    ]);
 
-        if ($status === Password::RESET_LINK_SENT) {
-            return response()->json([
-                'success' => true,
-                'message' => 'Password reset link sent successfully.',
-            ]);
-        }
+    $key = 'admin|' . Str::lower($request->email) . '|' . $request->ip();
+
+    if (RateLimiter::tooManyAttempts($key, 5)) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Too many login attempts. Try again later.',
+            'retry_after' => RateLimiter::availableIn($key),
+        ], 429);
+    }
+
+    $adminEmail = config('app.admin_email');
+    $adminPasswordHash = config('app.admin_password_hash');
+
+    if (
+        !$adminEmail ||
+        !$adminPasswordHash ||
+        Str::lower($request->email) !== Str::lower($adminEmail) ||
+        !Hash::check($request->password, $adminPasswordHash)
+    ) {
+        RateLimiter::hit($key, 900);
 
         return response()->json([
             'success' => false,
-            'message' => 'Unable to send reset link. Please check your email.',
-        ], 422);
+            'message' => 'Access denied. Invalid admin credentials.',
+        ], 401);
     }
+
+    RateLimiter::clear($key);
+
+    $token = Crypt::encryptString(json_encode([
+        'type' => 'admin',
+        'email' => $adminEmail,
+        'expires_at' => now()->addHours(8)->timestamp,
+    ]));
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Admin login successful!',
+        'user' => [
+            'email' => $adminEmail,
+            'role' => 'admin',
+        ],
+        'token' => $token,
+    ]);
+}
 
     // Reset Password
     public function resetPassword(Request $request)

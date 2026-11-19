@@ -54,7 +54,7 @@ function getAvatarUrl(avatar) {
 }
 
 function StoryCard({ story, isDark, currentUser }) {
-  const readerLink = `/reader?story=${encodeURIComponent(story.id)}`
+  const readerLink = `/story/${story.id}`
 
   const [liked, setLiked] = useState(false)
   const [likesCount, setLikesCount] = useState(story.likes_count ?? 0)

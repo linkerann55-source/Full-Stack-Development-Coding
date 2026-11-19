@@ -1,9 +1,7 @@
 
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-
-const ADMIN_EMAIL = 'admin@moonlitpages.com'
-const ADMIN_PASSWORD = 'moonlit123'
+import api from '../api/axios'
 
 export default function AdminLogin() {
   const navigate = useNavigate()
@@ -11,28 +9,49 @@ export default function AdminLogin() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
 
-  function handleLogin(event) {
+  async function handleLogin(event) {
     event.preventDefault()
     setError('')
+    setLoading(true)
 
-    const validEmail =
-      email.trim().toLowerCase() === ADMIN_EMAIL.toLowerCase()
+    try {
+      const response = await api.post('/admin/login', {
+        email: email.trim(),
+        password,
+      })
 
-    const validPassword = password === ADMIN_PASSWORD
+      const { user, token } = response.data
 
-    if (!validEmail || !validPassword) {
-      setError('Access denied. Invalid admin email or password.')
-      return
+      if (!token || user?.role !== 'admin') {
+        setError('Access denied. Admin account required.')
+        return
+      }
+
+      // Store admin authentication separately from user login
+      localStorage.setItem('moonlit_admin_token', token)
+      localStorage.setItem('moonlit_admin_logged_in', 'true')
+      localStorage.setItem('moonlit_admin_user', JSON.stringify(user))
+
+      setPassword('')
+      navigate('/admin', { replace: true })
+
+    } catch (err) {
+      setError(
+        err.response?.data?.message ||
+        err.response?.data?.errors?.email?.[0] ||
+        'Unable to sign in. Please check your credentials.'
+      )
+    } finally {
+      setLoading(false)
     }
-
-    sessionStorage.setItem('moonlit_admin_logged_in', 'true')
-    navigate('/admin', { replace: true })
   }
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-[#F7F1FF] px-4 py-10">
       <div className="w-full max-w-md rounded-3xl border border-[#E5D7FA] bg-white p-8 shadow-xl shadow-purple-100 sm:p-10">
+
         <div className="mb-8 text-center">
           <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-[#EEE4FF] text-3xl">
             🌙
@@ -91,15 +110,17 @@ export default function AdminLogin() {
 
           <button
             type="submit"
-            className="w-full rounded-xl bg-[#7950A8] px-4 py-3 font-semibold text-white transition hover:bg-[#633D90]"
+            disabled={loading}
+            className="w-full rounded-xl bg-[#7950A8] px-4 py-3 font-semibold text-white transition hover:bg-[#633D90] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            Sign In to Admin
+            {loading ? 'Signing in...' : 'Sign In to Admin'}
           </button>
         </form>
 
         <p className="mt-6 text-center text-xs text-[#9A8BAA]">
           Authorized administrators only
         </p>
+
       </div>
     </main>
   )

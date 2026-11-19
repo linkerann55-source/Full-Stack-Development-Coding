@@ -1,11 +1,13 @@
+
 import { Navigate, Outlet } from 'react-router-dom'
 
 export default function AdminRoute() {
+  const token = localStorage.getItem('moonlit_admin_token')
   const isAdminLoggedIn =
-    sessionStorage.getItem('moonlit_admin_logged_in') === 'true'
+    localStorage.getItem('moonlit_admin_logged_in') === 'true'
 
-  if (!isAdminLoggedIn) {
-    return <Navigate to="/admin-login" replace />
+  if (!token || !isAdminLoggedIn) {
+    return <Navigate to="/admin/login" replace />
   }
 
   return <Outlet />
