@@ -81,28 +81,28 @@ public function index(Request $request)
         ], 201);
     }
 
-    // Get one story
-    public function show($id)
-    {
-        $story = Story::with([
-            'user',
-            'chapters',
-        ])->findOrFail($id);
+// Get one story
+public function show(Request $request, $id)
+{
+    $story = Story::with([
+        'user',
+        'chapters',
+    ])->findOrFail($id);
 
-        $userId = Auth::id();
+    $userId = $request->user()?->id;
 
-        if (
-            $story->status !== 'published' &&
-            $story->user_id !== $userId
-        ) {
-            abort(404);
-        }
-
-        return response()->json([
-            'success' => true,
-            'story' => $story,
-        ]);
+    if (
+        $story->status !== 'published' &&
+        (!$userId || $story->user_id !== $userId)
+    ) {
+        abort(404);
     }
+
+    return response()->json([
+        'success' => true,
+        'story' => $story,
+    ]);
+}
 
     // Update a story
     public function update(Request $request, $id)
@@ -192,6 +192,66 @@ public function index(Request $request)
             'success' => true,
             'message' => 'Story unpublished successfully!',
             'story' => $story->fresh(),
+        ]);
+    }
+
+    // Admin: Get all stories
+    public function adminIndex()
+    {
+        $stories = Story::with('user:id,name,username,avatar')
+            ->withCount(['chapters', 'likes', 'comments'])
+            ->latest()
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'stories' => $stories,
+        ]);
+    }
+
+    // Admin: Publish any story
+    public function adminPublish($id)
+    {
+        $story = Story::findOrFail($id);
+
+        $story->update([
+            'status' => 'published',
+            'published_at' => $story->published_at ?? now(),
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Story published successfully!',
+            'story' => $story->fresh(),
+        ]);
+    }
+
+    // Admin: Unpublish any story
+    public function adminUnpublish($id)
+    {
+        $story = Story::findOrFail($id);
+
+        $story->update([
+            'status' => 'unpublished',
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Story unpublished successfully!',
+            'story' => $story->fresh(),
+        ]);
+    }
+
+    // Admin: Delete any story
+    public function adminDestroy($id)
+    {
+        $story = Story::findOrFail($id);
+
+        $story->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Story deleted successfully!',
         ]);
     }
 }

@@ -153,4 +153,10 @@ Route::prefix('admin')->middleware('admin.auth')->group(function () {
         ]);
     });
 
+        // Admin story management
+    Route::get('/stories', [StoryController::class, 'adminIndex']);
+    Route::post('/stories/{id}/publish', [StoryController::class, 'adminPublish']);
+    Route::post('/stories/{id}/unpublish', [StoryController::class, 'adminUnpublish']);
+    Route::delete('/stories/{id}', [StoryController::class, 'adminDestroy']);
+
 });
