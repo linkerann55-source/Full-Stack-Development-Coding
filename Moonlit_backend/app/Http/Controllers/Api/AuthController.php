@@ -36,47 +36,59 @@ class AuthController extends Controller
         ], 201);
     }
 
-    // Login with attempt limit
-    public function login(Request $request)
-    {
-        $request->validate([
-            'email' => 'required|email',
-            'password' => 'required|string',
-        ]);
 
-        $key = Str::lower($request->email) . '|' . $request->ip();
+// Login with attempt limit and account suspension check
+public function login(Request $request)
+{
+    $request->validate([
+        'email' => 'required|email',
+        'password' => 'required|string',
+    ]);
 
-        // Maximum 5 failed attempts within 15 minutes
-        if (RateLimiter::tooManyAttempts($key, 5)) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Too many login attempts. Please try again in 15 minutes.',
-                'retry_after' => RateLimiter::availableIn($key),
-            ], 429);
-        }
+    $key = Str::lower($request->email) . '|' . $request->ip();
 
-        $user = User::where('email', $request->email)->first();
-
-        if (!$user || !Hash::check($request->password, $user->password)) {
-            RateLimiter::hit($key, 900);
-
-            throw ValidationException::withMessages([
-                'email' => ['Invalid email or password.'],
-            ]);
-        }
-
-        // Clear failed attempts after successful login
-        RateLimiter::clear($key);
-
-        $token = $user->createToken('moonlit-pages')->plainTextToken;
-
+    // Maximum 5 failed attempts within 15 minutes
+    if (RateLimiter::tooManyAttempts($key, 5)) {
         return response()->json([
-            'success' => true,
-            'message' => 'Login successful!',
-            'user' => $user,
-            'token' => $token,
+            'success' => false,
+            'message' => 'Too many login attempts. Please try again in 15 minutes.',
+            'retry_after' => RateLimiter::availableIn($key),
+        ], 429);
+    }
+
+    // Find user
+    $user = User::where('email', $request->email)->first();
+
+    // Check email and password
+    if (!$user || !Hash::check($request->password, $user->password)) {
+        RateLimiter::hit($key, 900);
+
+        throw ValidationException::withMessages([
+            'email' => ['Invalid email or password.'],
         ]);
     }
+
+    // Prevent suspended users from logging in
+    if ($user->is_suspended) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Your account has been suspended. Please contact the administrator.',
+        ], 403);
+    }
+
+    // Clear failed attempts after successful login
+    RateLimiter::clear($key);
+
+    // Create authentication token
+    $token = $user->createToken('moonlit-pages')->plainTextToken;
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Login successful!',
+        'user' => $user,
+        'token' => $token,
+    ]);
+}
 
 
 // Admin Login - Fixed credentials, no database account
@@ -132,46 +144,6 @@ public function adminLogin(Request $request)
         'token' => $token,
     ]);
 }
-
-    // Reset Password
-    public function resetPassword(Request $request)
-    {
-        $request->validate([
-            'token' => 'required',
-            'email' => 'required|email',
-            'password' => 'required|string|min:8|confirmed',
-        ]);
-
-        $status = Password::reset(
-            $request->only(
-                'email',
-                'password',
-                'password_confirmation',
-                'token'
-            ),
-            function ($user, $password) {
-                $user->forceFill([
-                    'password' => Hash::make($password),
-                    'remember_token' => Str::random(60),
-                ])->save();
-
-                // Revoke existing API tokens
-                $user->tokens()->delete();
-            }
-        );
-
-        if ($status === Password::PASSWORD_RESET) {
-            return response()->json([
-                'success' => true,
-                'message' => 'Password reset successfully!',
-            ]);
-        }
-
-        return response()->json([
-            'success' => false,
-            'message' => 'Invalid or expired password reset link.',
-        ], 422);
-    }
 
     // Logout
     public function logout(Request $request)

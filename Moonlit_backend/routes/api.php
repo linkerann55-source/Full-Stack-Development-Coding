@@ -11,6 +11,9 @@ use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\ConversationController;
 use App\Http\Controllers\Api\PollController;
 use App\Http\Controllers\Api\UserSafetyController;
+use App\Http\Controllers\Api\UserController;
+use App\Http\Controllers\Api\AdminReportController;
+use App\Http\Controllers\Api\AdminActivityLogController;
 
 Route::get('/test', function () {
     return response()->json([
@@ -33,16 +36,16 @@ Route::prefix('')->group(function () {
     Route::post('/register', [AuthController::class, 'register']);
     Route::post('/login', [AuthController::class, 'login']);
     Route::post('/admin/login', [AuthController::class, 'adminLogin']);
-    Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
-    Route::post('/reset-password', [AuthController::class, 'resetPassword']);
 
     // Protected authentication routes
-    Route::middleware('auth:sanctum')->group(function () {
+    Route::middleware(['auth:sanctum', 'check.suspended'])->group(function () {
         Route::post('/logout', [AuthController::class, 'logout']);
         Route::get('/user', [AuthController::class, 'user']);
         Route::get('/profile', [ProfileController::class, 'show']);
         Route::put('/profile', [ProfileController::class, 'update']);
         Route::post('/profile/photos', [ProfileController::class, 'uploadPhotos']);
+        Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
+        Route::post('/reset-password', [AuthController::class, 'resetPassword']);
 
         // Notifications
         Route::get('/notifications', [NotificationController::class, 'index']);
@@ -59,6 +62,9 @@ Route::prefix('')->group(function () {
         Route::get('/users/{userId}/block-status', [UserSafetyController::class, 'blockStatus']);
 
         Route::post('/users/{userId}/report', [UserSafetyController::class, 'report']);
+
+        Route::post('/stories/{storyId}/report', [UserSafetyController::class, 'reportStory']);
+        Route::post('/comments/{commentId}/report', [UserSafetyController::class, 'reportComment']);
     });
 
 });
@@ -76,7 +82,7 @@ Route::get('/users/{userId}/followers', [SocialController::class, 'followers']);
 Route::get('/users/{userId}/following', [SocialController::class, 'following']);
 
 // Protected story routes
-Route::middleware('auth:sanctum')->group(function () {
+Route::middleware(['auth:sanctum', 'check.suspended'])->group(function () {
 
     Route::get('/my-stories', [StoryController::class, 'myStories']);
 
@@ -128,7 +134,7 @@ Route::get('/conversations', [ConversationController::class, 'index']);
 Route::get('/polls', [PollController::class, 'index']);
 
 // Protected conversation and poll routes
-Route::middleware('auth:sanctum')->group(function () {
+Route::middleware(['auth:sanctum', 'check.suspended'])->group(function () {
 
     // Conversations
     Route::post('/conversations', [ConversationController::class, 'store']);
@@ -158,5 +164,18 @@ Route::prefix('admin')->middleware('admin.auth')->group(function () {
     Route::post('/stories/{id}/publish', [StoryController::class, 'adminPublish']);
     Route::post('/stories/{id}/unpublish', [StoryController::class, 'adminUnpublish']);
     Route::delete('/stories/{id}', [StoryController::class, 'adminDestroy']);
+
+    // Admin User Management
+    Route::get('/users', [UserController::class, 'adminIndex']);
+    Route::post('/users/{id}/suspend', [UserController::class, 'adminSuspend']);
+    Route::post('/users/{id}/activate', [UserController::class, 'adminActivate']);
+    Route::delete('/users/{id}', [UserController::class, 'adminDestroy']);
+
+    // Admin Report Management
+    Route::get('/reports', [AdminReportController::class, 'index']);
+    Route::patch('/reports/{id}/resolve', [AdminReportController::class, 'resolve']);
+    Route::delete('/reports/{id}', [AdminReportController::class, 'destroy']);
+    
+    Route::get('/activity-logs', [AdminActivityLogController::class, 'index']);
 
 });

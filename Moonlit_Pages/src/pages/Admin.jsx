@@ -7,10 +7,11 @@ import useAdmin, {
   statusClass,
 } from '../hooks/useAdmin'
 
-import AdminOverview from './admin/AdminOverview'
+import AdminOverview from './admin/adminOverview'
 import AdminStories from './admin/AdminStories'
 import AdminUsers from './admin/AdminUsers'
 import AdminReports from './admin/AdminReports'
+import AdminActivityLogs from './admin/AdminActivityLogs'
 
 import AdminSidebar from '../components/AdminSidebar'
 import AdminHeader from '../components/AdminHeader'
@@ -20,6 +21,7 @@ const menuItems = [
   { id: 'stories', label: 'Stories', icon: '▤' },
   { id: 'users', label: 'Users', icon: '♙' },
   { id: 'reports', label: 'Reports', icon: '⚑' },
+  { id: 'activity-logs', label: 'Activity Logs', icon: '◷' },
 ]
 
 const panelStyle = {
@@ -71,6 +73,7 @@ export default function Admin() {
     stories: 'Story Management',
     users: 'User Management',
     reports: 'Reports',
+    'activity-logs': 'Activity Logs',
   }[section]
 
   return (
@@ -172,6 +175,10 @@ export default function Admin() {
                 resolveReport={resolveReport}
                 resetFilters={resetFilters}
               />
+            )}
+
+            {section === 'activity-logs' && (
+              <AdminActivityLogs />
             )}
           </div>
 

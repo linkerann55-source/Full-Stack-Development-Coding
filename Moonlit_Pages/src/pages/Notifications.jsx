@@ -16,6 +16,8 @@ const notificationIcons = {
   follow: '🌙',
   reply: '↩️',
   activity: '🔔',
+  warning: '⚠️',
+  content_removed: '🗑️',
 }
 
 const API_ORIGIN = 'http://127.0.0.1:8000'

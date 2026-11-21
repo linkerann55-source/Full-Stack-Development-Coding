@@ -16,6 +16,10 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'admin.auth' => \App\Http\Middleware\AdminAuth::class,
         ]);
+        $middleware->alias([
+            'admin.auth' => \App\Http\Middleware\AdminAuth::class,
+            'check.suspended' => \App\Http\Middleware\CheckSuspendedUser::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         //

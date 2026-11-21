@@ -43,4 +43,57 @@ export const deleteAdminStory = async (id) => {
   return response.data
 }
 
+// Get all registered users
+export const getAdminUsers = async () => {
+  const response = await adminApi.get('/users')
+  return response.data
+}
+
+// Suspend a user
+export const suspendAdminUser = async (id) => {
+  const response = await adminApi.post(`/users/${id}/suspend`)
+  return response.data
+}
+
+// Activate a user
+export const activateAdminUser = async (id) => {
+  const response = await adminApi.post(`/users/${id}/activate`)
+  return response.data
+}
+
+// Delete a user
+export const deleteAdminUser = async (id) => {
+  const response = await adminApi.delete(`/users/${id}`)
+  return response.data
+}
+
+// Get all user reports
+export const getAdminReports = async () => {
+  const response = await adminApi.get('/reports')
+  return response.data
+}
+
+// Resolve a user report
+export const resolveAdminReport = async (id, adminNote = '') => {
+  const response = await adminApi.patch(`/reports/${id}/resolve`, {
+    admin_note: adminNote,
+  })
+
+  return response.data
+}
+
+// Delete a user report
+export const deleteAdminReport = async (id) => {
+  const response = await adminApi.delete(`/reports/${id}`)
+  return response.data
+}
+
+// Get admin activity logs
+export const getAdminActivityLogs = async (page = 1) => {
+  const response = await adminApi.get('/activity-logs', {
+    params: { page },
+  })
+
+  return response.data
+}
 export default adminApi

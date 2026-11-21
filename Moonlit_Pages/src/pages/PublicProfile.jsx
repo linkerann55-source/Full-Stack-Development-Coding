@@ -3,6 +3,8 @@ import { useEffect, useState } from 'react'
 import { Link, useParams, useOutletContext } from 'react-router-dom'
 import api from '../api/axios.js'
 import { getStories } from '../api/stories.js'
+import { reportUser } from '../api/profile.js'
+
 import {
   getConversations,
   addConversationReply as addConversationReplyAPI,
@@ -555,40 +557,40 @@ export default function PublicProfile() {
     }
   }
 
-  // Submit report
-  async function handleReportSubmit(event) {
-    event.preventDefault()
+// Submit profile report
+async function handleReportSubmit(event) {
+  event.preventDefault()
 
-    if (!author?.id || !reportReason || safetyLoading) return
+  if (!author?.id || !reportReason || safetyLoading) return
 
-    setSafetyLoading(true)
-    setMessage('')
+  setSafetyLoading(true)
+  setMessage('')
 
-    try {
-      await api.post(`/users/${author.id}/report`, {
-        reason: reportReason,
-        details: reportDetails.trim() || null,
-      })
+  try {
+    await reportUser(author.id, {
+      reason: reportReason,
+      details: reportDetails.trim(),
+    })
 
-      setShowReportModal(false)
-      setReportReason('')
-      setReportDetails('')
-      setMenuOpen(false)
+    setShowReportModal(false)
+    setReportReason('')
+    setReportDetails('')
+    setMenuOpen(false)
 
-      setMessage(
-        'Thank you. Your report has been submitted for review.',
-      )
-    } catch (error) {
-      console.error('Report submission error:', error)
+    setMessage(
+      'Thank you. Your report has been submitted for review.',
+    )
+  } catch (error) {
+    console.error('Report submission error:', error)
 
-      setMessage(
-        error.response?.data?.message ||
-          'Unable to submit your report.',
-      )
-    } finally {
-      setSafetyLoading(false)
-    }
+    setMessage(
+      error.response?.data?.message ||
+        'Unable to submit your report.',
+    )
+  } finally {
+    setSafetyLoading(false)
   }
+}
 
   const tabs = [
     { id: 'stories', label: 'Stories' },

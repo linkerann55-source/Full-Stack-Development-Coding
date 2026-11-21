@@ -22,7 +22,11 @@ import {
   deletePoll as deletePollAPI,
 } from '../api/community.js'
 
-const PROFILE_KEY = 'moonlit_pages_profile'
+function getProfileKey(userId) {
+  return userId
+    ? `moonlit_pages_profile_${userId}`
+    : 'moonlit_pages_profile'
+}
 
 const defaultProfile = {
   username: 'Moonlight Reader',
@@ -177,10 +181,19 @@ export default function Profile() {
 
   const [user, setUser] = useState(() => getCurrentUser() || {})
 
-  const [profile, setProfile] = useState(() => ({
-    ...defaultProfile,
-    ...(readJSON(PROFILE_KEY, {}) || {}),
-  }))
+  const [profile, setProfile] = useState(() => {
+    const currentUser = getCurrentUser()
+    const profileKey = getProfileKey(currentUser?.id)
+
+    return {
+      ...defaultProfile,
+      ...(readJSON(profileKey, {}) || {}),
+      username:
+        currentUser?.username ||
+        currentUser?.name ||
+        defaultProfile.username,
+    }
+  })
 
   const [photoFiles, setPhotoFiles] = useState({
     avatar: null,
@@ -241,7 +254,8 @@ export default function Profile() {
 
 async function loadProfile() {
   const currentUser = getCurrentUser()
-  const saved = readJSON(PROFILE_KEY, {})
+  const profileKey = getProfileKey(currentUser?.id)
+  const saved = readJSON(profileKey, {})
 
   const cachedProfile = {
     ...defaultProfile,
@@ -282,7 +296,7 @@ async function loadProfile() {
     }
 
     setProfile(updatedProfile)
-    saveJSON(PROFILE_KEY, updatedProfile)
+    saveJSON(profileKey, updatedProfile)
 
     // Get follower and following counts using the actual user ID
     const userId =
@@ -310,7 +324,6 @@ async function loadProfile() {
     console.error('Profile loading error:', error)
   }
 }
-
 
   async function loadMyStories() {
     setLoadingStories(true)

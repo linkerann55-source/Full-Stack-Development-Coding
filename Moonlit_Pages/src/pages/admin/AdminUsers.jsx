@@ -60,56 +60,58 @@ export default function AdminUsers({
           </thead>
 
           <tbody>
-            {filteredUsers.map((user) => (
-              <tr
-                key={user.id}
-                className="border-t border-[#f0e8f6]"
-              >
-                <td className="px-5 py-4 font-semibold text-[#493257]">
-                  {user.username || user.name || 'Unnamed User'}
-                </td>
+            {filteredUsers.map((user) => {
+              const status = user.is_suspended
+                ? 'Suspended'
+                : 'Active'
 
-                <td className="px-5 py-4 text-[#7f6c8c]">
-                  {user.email || '—'}
-                </td>
+              return (
+                <tr
+                  key={user.id}
+                  className="border-t border-[#f0e8f6]"
+                >
+                  <td className="px-5 py-4 font-semibold text-[#493257]">
+                    {user.username || user.name || 'Unnamed User'}
+                  </td>
 
-                <td className="px-5 py-4 text-[#7f6c8c]">
-                  {user.role || 'Reader'}
-                </td>
+                  <td className="px-5 py-4 text-[#7f6c8c]">
+                    {user.email || '—'}
+                  </td>
 
-                <td className="px-5 py-4">
-                  <span
-                    className={`rounded-full px-3 py-1 text-xs font-semibold ${statusClass(
-                      user.status
-                    )}`}
-                  >
-                    {user.status || 'Active'}
-                  </span>
-                </td>
+                  <td className="px-5 py-4 text-[#7f6c8c]">
+                    {user.role || 'Reader'}
+                  </td>
 
-                <td className="px-5 py-4">
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => toggleUserStatus(user)}
-                      className="rounded-lg bg-[#f3eaff] px-3 py-2 text-xs font-semibold text-[#79549b] hover:bg-[#e8d9fb]"
+                  <td className="px-5 py-4">
+                    <span
+                      className={`rounded-full px-3 py-1 text-xs font-semibold ${statusClass(status)}`}
                     >
-                      {(user.status || 'Active').toLowerCase() === 'active'
-                        ? 'Suspend'
-                        : 'Activate'}
-                    </button>
+                      {status}
+                    </span>
+                  </td>
 
-                    <button
-                      type="button"
-                      onClick={() => deleteUser(user)}
-                      className="rounded-lg bg-[#fff0f4] px-3 py-2 text-xs font-semibold text-[#b65378] hover:bg-[#ffe0e9]"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
+                  <td className="px-5 py-4">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => toggleUserStatus(user)}
+                        className="rounded-lg bg-[#f3eaff] px-3 py-2 text-xs font-semibold text-[#79549b] hover:bg-[#e8d9fb]"
+                      >
+                        {user.is_suspended ? 'Activate' : 'Suspend'}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => deleteUser(user)}
+                        className="rounded-lg bg-[#fff0f4] px-3 py-2 text-xs font-semibold text-[#b65378] hover:bg-[#ffe0e9]"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
 

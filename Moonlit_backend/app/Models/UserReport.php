@@ -10,6 +10,9 @@ class UserReport extends Model
     protected $fillable = [
         'reporter_id',
         'reported_user_id',
+        'report_type',
+        'story_id',
+        'comment_id',
         'reason',
         'details',
         'status',
@@ -38,5 +41,15 @@ class UserReport extends Model
     public function reviewer(): BelongsTo
     {
         return $this->belongsTo(User::class, 'reviewed_by');
+    }
+
+    public function story(): BelongsTo
+    {
+        return $this->belongsTo(Story::class, 'story_id');
+    }
+
+    public function comment(): BelongsTo
+    {
+        return $this->belongsTo(Comment::class, 'comment_id');
     }
 }

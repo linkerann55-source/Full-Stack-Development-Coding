@@ -1,4 +1,4 @@
-
+import { reportStory } from '../api/profile.js'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Link,
@@ -63,6 +63,12 @@ export default function StoryDetails() {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState('')
   const [refreshKey, setRefreshKey] = useState(0)
+
+  const [showReportModal, setShowReportModal] = useState(false)
+  const [reportReason, setReportReason] = useState('')
+  const [reportDetails, setReportDetails] = useState('')
+  const [reportLoading, setReportLoading] = useState(false)
+  const [reportMessage, setReportMessage] = useState('')
 
   const colors = {
     page: isDark
@@ -183,6 +189,35 @@ export default function StoryDetails() {
     if (!chapter?.id) return
 
     navigate(`/reader/${story.id}/${chapter.id}`)
+  }
+
+    async function handleReportSubmit(event) {
+    event.preventDefault()
+
+    if (!story?.id || !reportReason || reportLoading) return
+
+    setReportLoading(true)
+    setReportMessage('')
+
+    try {
+      await reportStory(story.id, {
+        reason: reportReason,
+        details: reportDetails.trim(),
+      })
+
+      setShowReportModal(false)
+      setReportReason('')
+      setReportDetails('')
+      setReportMessage('Thank you. Your report has been submitted for review.')
+    } catch (error) {
+      console.error('Story report error:', error)
+
+      setReportMessage(
+        error.response?.data?.message || 'Unable to submit your report.'
+      )
+    } finally {
+      setReportLoading(false)
+    }
   }
 
   // Loading state
@@ -347,6 +382,17 @@ export default function StoryDetails() {
                 >
                   ↻ Refresh
                 </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReportMessage('')
+                    setShowReportModal(true)
+                  }}
+                  className={`rounded-xl border px-5 py-3 font-semibold transition ${colors.secondaryButton}`}
+                >
+                  ⚑ Report Story
+                </button>
               </div>
             </div>
           </div>
@@ -452,6 +498,88 @@ export default function StoryDetails() {
         </section>
 
       </div>
+
+      {showReportModal && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+    <div className={`w-full max-w-md rounded-2xl border p-6 shadow-2xl ${colors.panel}`}>
+      <h2 className={`mb-2 text-xl font-bold ${colors.heading}`}>
+        Report Story
+      </h2>
+
+      <p className={`mb-5 text-sm ${colors.muted}`}>
+        Why are you reporting this story?
+      </p>
+
+      <form onSubmit={handleReportSubmit}>
+        <label className={`mb-2 block text-sm font-semibold ${colors.heading}`}>
+          Report reason
+        </label>
+
+        <select
+          value={reportReason}
+          onChange={(event) => setReportReason(event.target.value)}
+          required
+          className={`mb-4 w-full rounded-xl border p-3 outline-none ${
+            isDark
+              ? 'border-[#49385F] bg-[#1B1230] text-white'
+              : 'border-[#E7D9C9] bg-white text-[#49372E]'
+          }`}
+        >
+          <option value="">Select a reason</option>
+          <option value="Harassment or bullying">Harassment or bullying</option>
+          <option value="Hate speech">Hate speech</option>
+          <option value="Inappropriate content">Inappropriate content</option>
+          <option value="Violence or harmful content">Violence or harmful content</option>
+          <option value="Copyright infringement">Copyright infringement</option>
+          <option value="Spam or misleading content">Spam or misleading content</option>
+          <option value="Other">Other</option>
+        </select>
+
+        <label className={`mb-2 block text-sm font-semibold ${colors.heading}`}>
+          Additional details (optional)
+        </label>
+
+        <textarea
+          value={reportDetails}
+          onChange={(event) => setReportDetails(event.target.value)}
+          rows={4}
+          maxLength={2000}
+          placeholder="Explain why this story should be reviewed..."
+          className={`mb-5 w-full resize-none rounded-xl border p-3 outline-none ${
+            isDark
+              ? 'border-[#49385F] bg-[#1B1230] text-white placeholder:text-[#8F829F]'
+              : 'border-[#E7D9C9] bg-white text-[#49372E] placeholder:text-[#A99A90]'
+          }`}
+        />
+
+        <div className="flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={() => setShowReportModal(false)}
+            disabled={reportLoading}
+            className={`rounded-xl border px-4 py-2 font-semibold ${colors.secondaryButton}`}
+          >
+            Cancel
+          </button>
+
+          <button
+            type="submit"
+            disabled={!reportReason || reportLoading}
+            className={`rounded-xl px-5 py-2 font-semibold disabled:cursor-not-allowed disabled:opacity-50 ${colors.primaryButton}`}
+          >
+            {reportLoading ? 'Submitting...' : 'Submit Report'}
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+)}
+
+{reportMessage && (
+  <div className="fixed bottom-5 right-5 z-[60] max-w-sm rounded-xl bg-[#25183D] px-5 py-3 text-sm text-white shadow-xl">
+    {reportMessage}
+  </div>
+)}
     </main>
   )
 }

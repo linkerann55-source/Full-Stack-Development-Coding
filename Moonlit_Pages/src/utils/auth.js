@@ -1,13 +1,19 @@
-
 import api from '../api/axios'
 
-const PROFILE_KEY = 'moonlit_pages_profile'
 const USER_KEY = 'moonlit_user'
 const TOKEN_KEY = 'moonlit_token'
 
-function readProfile() {
+function getProfileKey(userId) {
+  return userId
+    ? `moonlit_pages_profile_${userId}`
+    : 'moonlit_pages_profile'
+}
+
+function readProfile(userId) {
   try {
-    return JSON.parse(localStorage.getItem(PROFILE_KEY) || 'null')
+    return JSON.parse(
+      localStorage.getItem(getProfileKey(userId)) || 'null'
+    )
   } catch {
     return null
   }
@@ -20,23 +26,22 @@ export function getCurrentUser() {
       localStorage.getItem(USER_KEY) || 'null'
     )
 
-    const profile = readProfile()
-
     if (!user) return null
+
+    const profile = readProfile(user.id)
 
     return {
       ...user,
       username:
+        user.username ||
         profile?.username ||
         user.name ||
-        user.username ||
         user.email?.split('@')[0] ||
         'Reader',
       bio:
         profile?.bio ||
         'Lost in stories, found among the stars. ✨',
-      favoriteGenre:
-        profile?.favoriteGenre || 'Fantasy',
+      favoriteGenre: profile?.favoriteGenre || 'Fantasy',
       avatar: profile?.avatar || '',
     }
   } catch (error) {
@@ -47,8 +52,14 @@ export function getCurrentUser() {
 
 // Save profile information locally
 export function saveUserProfile(profileData) {
+  const currentUser = getCurrentUser()
+
+  if (!currentUser?.id) return null
+
+  const profileKey = getProfileKey(currentUser.id)
+
   const currentProfile = JSON.parse(
-    localStorage.getItem('moonlit_pages_profile') || '{}'
+    localStorage.getItem(profileKey) || '{}'
   )
 
   const updatedProfile = {
@@ -57,7 +68,7 @@ export function saveUserProfile(profileData) {
   }
 
   localStorage.setItem(
-    'moonlit_pages_profile',
+    profileKey,
     JSON.stringify(updatedProfile)
   )
 
@@ -85,9 +96,7 @@ export function updateCurrentUser(userData) {
       JSON.stringify(updatedUser)
     )
 
-    window.dispatchEvent(
-      new Event('moonlit-auth-updated')
-    )
+    window.dispatchEvent(new Event('moonlit-auth-updated'))
 
     return updatedUser
   } catch (error) {
@@ -109,12 +118,7 @@ export async function logoutUser() {
   } finally {
     localStorage.removeItem(TOKEN_KEY)
     localStorage.removeItem(USER_KEY)
-    localStorage.removeItem(PROFILE_KEY)
 
-    window.dispatchEvent(
-      new Event('moonlit-auth-updated')
-    )
+    window.dispatchEvent(new Event('moonlit-auth-updated'))
   }
 }
-
-

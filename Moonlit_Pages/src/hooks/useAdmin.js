@@ -7,70 +7,15 @@ import {
   publishAdminStory,
   unpublishAdminStory,
   deleteAdminStory,
+  getAdminUsers,
+  suspendAdminUser,
+  activateAdminUser,
+  deleteAdminUser,
+  getAdminReports,
+  resolveAdminReport,
 } from '../api/admin'
 
-const USERS_KEY = 'moonlit_pages_users'
-const REPORTS_KEY = 'moonlit_pages_reports'
-
-const seedUsers = [
-  {
-    id: 'user-1',
-    username: 'Luna Rose',
-    email: 'luna@example.com',
-    role: 'Writer',
-    status: 'Active',
-  },
-  {
-    id: 'user-2',
-    username: 'Aria Moon',
-    email: 'aria@example.com',
-    role: 'Writer',
-    status: 'Active',
-  },
-  {
-    id: 'user-3',
-    username: 'Noah Grey',
-    email: 'noah@example.com',
-    role: 'Reader',
-    status: 'Active',
-  },
-]
-
-const seedReports = [
-  {
-    id: 'report-1',
-    storyTitle: 'Example Story',
-    reporter: 'Reader123',
-    reason: 'Inappropriate content',
-    status: 'Pending',
-    createdAt: '2026-10-12',
-  },
-]
-
-function readArray(key, fallback) {
-  try {
-    const saved = localStorage.getItem(key)
-
-    if (saved === null) {
-      localStorage.setItem(key, JSON.stringify(fallback))
-      return fallback
-    }
-
-    const parsed = JSON.parse(saved)
-    return Array.isArray(parsed) ? parsed : fallback
-  } catch {
-    return fallback
-  }
-}
-
-function saveArray(key, data) {
-  try {
-    localStorage.setItem(key, JSON.stringify(data))
-  } catch (error) {
-    console.error(`Unable to save ${key}:`, error)
-  }
-}
-
+// Story helpers
 export function getTitle(story) {
   return story.title || story.name || 'Untitled Story'
 }
@@ -112,10 +57,7 @@ export function statusClass(status) {
     return 'bg-emerald-50 text-emerald-700'
   }
 
-  if (
-    value === 'pending' ||
-    value === 'draft'
-  ) {
+  if (value === 'pending' || value === 'draft') {
     return 'bg-amber-50 text-amber-700'
   }
 
@@ -141,29 +83,42 @@ export default function useAdmin() {
   const [filter, setFilter] = useState('All')
   const [notice, setNotice] = useState('')
 
-  // Load stories from Laravel and users/reports from localStorage
+  // Load stories, users and reports from Laravel
   useEffect(() => {
-    const loadStories = async () => {
+    const loadAdminData = async () => {
       try {
-        const response = await getAdminStories()
+        const [
+          storyResponse,
+          userResponse,
+          reportResponse,
+        ] = await Promise.all([
+          getAdminStories(),
+          getAdminUsers(),
+          getAdminReports(),
+        ])
 
-        if (response.success) {
-          setStories(response.stories || [])
+        if (storyResponse.success) {
+          setStories(storyResponse.stories || [])
+        }
+
+        if (userResponse.success) {
+          setUsers(userResponse.users || [])
+        }
+
+        if (reportResponse.success) {
+          setReports(reportResponse.reports || [])
         }
       } catch (error) {
-        console.error('Unable to load admin stories:', error)
+        console.error('Unable to load admin data:', error)
 
         setNotice(
           error.response?.data?.message ||
-          'Unable to load stories from the server.'
+          'Unable to load admin data from the server.'
         )
       }
     }
 
-    loadStories()
-
-    setUsers(readArray(USERS_KEY, seedUsers))
-    setReports(readArray(REPORTS_KEY, seedReports))
+    loadAdminData()
   }, [])
 
   // Automatically clear notification messages
@@ -200,8 +155,7 @@ export default function useAdmin() {
   ).length
 
   const pendingReports = reports.filter(
-    (report) =>
-      (report.status || 'Pending').toLowerCase() === 'pending'
+    (report) => String(report.status || 'pending').toLowerCase() === 'pending'
   ).length
 
   // Filter stories
@@ -230,38 +184,49 @@ export default function useAdmin() {
       const username = String(user.username || user.name || '')
       const email = String(user.email || '')
 
+      const status = user.is_suspended ? 'Suspended' : 'Active'
+
       const matchesSearch =
         username.toLowerCase().includes(term) ||
         email.toLowerCase().includes(term)
 
       const matchesFilter =
         filter === 'All' ||
-        (user.status || 'Active').toLowerCase() === filter.toLowerCase()
+        status.toLowerCase() === filter.toLowerCase()
 
       return matchesSearch && matchesFilter
     })
   }, [users, search, filter])
 
-  // Filter reports
+  // Filter reports from database records
   const filteredReports = useMemo(() => {
     const term = search.toLowerCase().trim()
 
     return reports.filter((report) => {
-      const storyTitle = String(
-        report.storyTitle || report.story || ''
+      const reportedUser = String(
+        report.reported_user?.username ||
+        report.reported_user?.name ||
+        ''
       )
 
-      const reporter = String(report.reporter || '')
+      const reporter = String(
+        report.reporter?.username ||
+        report.reporter?.name ||
+        ''
+      )
+
       const reason = String(report.reason || '')
+      const details = String(report.details || '')
 
       const matchesSearch =
-        storyTitle.toLowerCase().includes(term) ||
+        reportedUser.toLowerCase().includes(term) ||
         reporter.toLowerCase().includes(term) ||
-        reason.toLowerCase().includes(term)
+        reason.toLowerCase().includes(term) ||
+        details.toLowerCase().includes(term)
 
       const matchesFilter =
         filter === 'All' ||
-        (report.status || 'Pending').toLowerCase() ===
+        String(report.status || 'pending').toLowerCase() ===
           filter.toLowerCase()
 
       return matchesSearch && matchesFilter
@@ -282,15 +247,12 @@ export default function useAdmin() {
 
       if (currentStatus === 'published') {
         await unpublishAdminStory(story.id)
-
         refreshNotice('Story unpublished successfully.')
       } else {
         await publishAdminStory(story.id)
-
         refreshNotice('Story published successfully.')
       }
 
-      // Reload stories from database
       const response = await getAdminStories()
 
       if (response.success) {
@@ -317,7 +279,6 @@ export default function useAdmin() {
     try {
       await deleteAdminStory(story.id)
 
-      // Remove deleted story from admin screen
       setStories((previous) =>
         previous.filter((item) => item.id !== story.id)
       )
@@ -333,54 +294,78 @@ export default function useAdmin() {
     }
   }
 
-  // Toggle user status
-  const toggleUserStatus = (user) => {
-    const nextStatus =
-      (user.status || 'Active').toLowerCase() === 'active'
-        ? 'Suspended'
-        : 'Active'
+  // Suspend or activate user through Laravel
+  const toggleUserStatus = async (user) => {
+    try {
+      if (user.is_suspended) {
+        await activateAdminUser(user.id)
+        refreshNotice('User activated successfully.')
+      } else {
+        await suspendAdminUser(user.id)
+        refreshNotice('User suspended successfully.')
+      }
 
-    const updated = users.map((item) =>
-      item.id === user.id
-        ? { ...item, status: nextStatus }
-        : item
-    )
+      const response = await getAdminUsers()
 
-    setUsers(updated)
-    saveArray(USERS_KEY, updated)
+      if (response.success) {
+        setUsers(response.users || [])
+      }
+    } catch (error) {
+      console.error('Unable to update user:', error)
 
-    refreshNotice(`User ${nextStatus.toLowerCase()}.`)
+      refreshNotice(
+        error.response?.data?.message ||
+        'Unable to update user status.'
+      )
+    }
   }
 
-  // Delete user from local admin list
-  const deleteUser = (user) => {
+  // Delete user permanently through Laravel
+  const deleteUser = async (user) => {
     const name = user.username || user.name || 'this user'
 
-    if (!window.confirm(`Delete ${name}?`)) return
+    if (!window.confirm(`Delete ${name}? This cannot be undone.`)) {
+      return
+    }
 
-    const updated = users.filter(
-      (item) => item.id !== user.id
-    )
+    try {
+      await deleteAdminUser(user.id)
 
-    setUsers(updated)
-    saveArray(USERS_KEY, updated)
+      setUsers((previous) =>
+        previous.filter((item) => item.id !== user.id)
+      )
 
-    refreshNotice('User deleted.')
+      refreshNotice('User deleted successfully.')
+    } catch (error) {
+      console.error('Unable to delete user:', error)
+
+      refreshNotice(
+        error.response?.data?.message ||
+        'Unable to delete user.'
+      )
+    }
   }
 
-  // Resolve report
-  const resolveReport = (report) => {
-    const updated = reports.map((item) =>
-      item.id === report.id
-        ? { ...item, status: 'Resolved' }
-        : item
+const resolveReport = async (report, adminNote = '') => {
+  try {
+    await resolveAdminReport(report.id, adminNote)
+
+    const response = await getAdminReports()
+
+    if (response.success) {
+      setReports(response.reports || [])
+    }
+
+    refreshNotice('Report resolved successfully.')
+  } catch (error) {
+    console.error('Unable to resolve report:', error)
+
+    refreshNotice(
+      error.response?.data?.message ||
+      'Unable to resolve report.'
     )
-
-    setReports(updated)
-    saveArray(REPORTS_KEY, updated)
-
-    refreshNotice('Report marked as resolved.')
   }
+}
 
   // Reset search and filters
   const resetFilters = () => {

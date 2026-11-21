@@ -6,15 +6,18 @@ use App\Http\Controllers\Controller;
 use App\Models\Story;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use App\Models\AdminActivityLog;
+use App\Models\Notification;
 
 class StoryController extends Controller
 {
     // Get all published stories
 
+
 public function index(Request $request)
 {
     $query = Story::with('user:id,name,username,avatar')
-        ->withCount('chapters')
+        ->withCount(['chapters', 'likes'])
         ->where('status', 'published');
 
     if ($request->filled('search')) {
@@ -105,31 +108,48 @@ public function show(Request $request, $id)
 }
 
     // Update a story
-    public function update(Request $request, $id)
-    {
-        $story = Story::findOrFail($id);
+public function update(Request $request, $id)
+{
+    $story = Story::findOrFail($id);
 
-        abort_unless(
-            $story->user_id === $request->user()->id,
-            403,
-            'You are not allowed to update this story.'
-        );
+    abort_unless(
+        $story->user_id === $request->user()->id,
+        403,
+        'You are not allowed to update this story.'
+    );
 
-        $validated = $request->validate([
-            'title' => 'sometimes|required|string|max:255',
-            'description' => 'nullable|string',
-            'cover_image' => 'nullable|string',
-            'genre' => 'nullable|string|max:100',
-        ]);
+    $wasPublished = $story->status === 'published';
 
-        $story->update($validated);
+    $validated = $request->validate([
+        'title' => 'sometimes|required|string|max:255',
+        'description' => 'nullable|string',
+        'cover_image' => 'nullable|string',
+        'genre' => 'nullable|string|max:100',
+    ]);
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Story updated successfully!',
-            'story' => $story->fresh(),
-        ]);
+    $story->update($validated);
+
+    // Notify followers only when an already-published story is edited
+    if ($wasPublished) {
+        $writer = $request->user();
+
+        foreach ($writer->followers as $follow) {
+            Notification::create([
+                'user_id' => $follow->follower_id,
+                'actor_id' => $writer->id,
+                'type' => 'story_update',
+                'story_id' => $story->id,
+                'message' => $writer->name . ' updated their story: ' . $story->title,
+            ]);
+        }
     }
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Story updated successfully!',
+        'story' => $story->fresh(),
+    ]);
+}
 
     // Delete a story
     public function destroy(Request $request, $id)
@@ -150,28 +170,45 @@ public function show(Request $request, $id)
         ]);
     }
 
-    // Publish a story
-    public function publish(Request $request, $id)
-    {
-        $story = Story::findOrFail($id);
+// Publish a story
+public function publish(Request $request, $id)
+{
+    $story = Story::findOrFail($id);
 
-        abort_unless(
-            $story->user_id === $request->user()->id,
-            403,
-            'You are not allowed to publish this story.'
-        );
+    abort_unless(
+        $story->user_id === $request->user()->id,
+        403,
+        'You are not allowed to publish this story.'
+    );
 
-        $story->update([
-            'status' => 'published',
-            'published_at' => now(),
-        ]);
+    $wasPublished = $story->status === 'published';
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Story published successfully!',
-            'story' => $story->fresh(),
-        ]);
+    $story->update([
+        'status' => 'published',
+        'published_at' => $story->published_at ?? now(),
+    ]);
+
+    // Notify followers only when publishing for the first time
+    if (!$wasPublished) {
+        $writer = $request->user();
+
+        foreach ($writer->followers as $follow) {
+            Notification::create([
+                'user_id' => $follow->follower_id,
+                'actor_id' => $writer->id,
+                'type' => 'new_story',
+                'story_id' => $story->id,
+                'message' => $writer->name . ' published a new story: ' . $story->title,
+            ]);
+        }
     }
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Story published successfully!',
+        'story' => $story->fresh(),
+    ]);
+}
 
     // Unpublish a story
     public function unpublish(Request $request, $id)
@@ -209,7 +246,7 @@ public function show(Request $request, $id)
         ]);
     }
 
-    // Admin: Publish any story
+   // Admin: Publish any story
     public function adminPublish($id)
     {
         $story = Story::findOrFail($id);
@@ -218,6 +255,13 @@ public function show(Request $request, $id)
             'status' => 'published',
             'published_at' => $story->published_at ?? now(),
         ]);
+
+        AdminActivityLog::record(
+            'Publish Story',
+            'Admin published story: ' . $story->title,
+            $story->id,
+            'Story'
+        );
 
         return response()->json([
             'success' => true,
@@ -234,6 +278,13 @@ public function show(Request $request, $id)
         $story->update([
             'status' => 'unpublished',
         ]);
+
+        AdminActivityLog::record(
+            'Unpublish Story',
+            'Admin unpublished story: ' . $story->title,
+            $story->id,
+            'Story'
+        );
 
         return response()->json([
             'success' => true,

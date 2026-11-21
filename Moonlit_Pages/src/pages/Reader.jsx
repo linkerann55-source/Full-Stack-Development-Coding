@@ -9,6 +9,7 @@ import {
 
 import { getStory } from '../api/stories.js'
 import { getChapters } from '../api/chapters.js'
+import { reportComment } from '../api/profile.js'
 
 import {
   getComments,
@@ -93,6 +94,13 @@ export default function Reader() {
   const [commentSubmitting, setCommentSubmitting] = useState(false)
   const [editingCommentId, setEditingCommentId] = useState(null)
   const [editingCommentText, setEditingCommentText] = useState('')
+
+  // Comment report states
+  const [showCommentReportModal, setShowCommentReportModal] = useState(false)
+  const [reportingCommentId, setReportingCommentId] = useState(null)
+  const [commentReportReason, setCommentReportReason] = useState('')
+  const [commentReportDetails, setCommentReportDetails] = useState('')
+  const [commentReportLoading, setCommentReportLoading] = useState(false)
 
   const [bookmarks, setBookmarks] = useState(() =>
     readList(BOOKMARKS_KEY)
@@ -460,6 +468,43 @@ export default function Reader() {
     }
   }
 
+  // Submit comment report
+  async function handleCommentReportSubmit(event) {
+    event.preventDefault()
+
+    if (
+      !reportingCommentId ||
+      !commentReportReason ||
+      commentReportLoading
+    ) {
+      return
+    }
+
+    try {
+      setCommentReportLoading(true)
+
+      await reportComment(reportingCommentId, {
+        reason: commentReportReason,
+        details: commentReportDetails.trim(),
+      })
+
+      setShowCommentReportModal(false)
+      setReportingCommentId(null)
+      setCommentReportReason('')
+      setCommentReportDetails('')
+
+      setMessage('Thank you. Your comment report has been submitted.')
+    } catch (error) {
+      console.error('Comment report error:', error)
+
+      setMessage(
+        error.response?.data?.message || 'Unable to submit your report.'
+      )
+    } finally {
+      setCommentReportLoading(false)
+    }
+  }
+
   // Comment ownership
   function isCommentOwner(comment) {
     return (
@@ -787,28 +832,43 @@ export default function Reader() {
                       'Reader'}
                   </p>
 
-                  {isCommentOwner(comment) && (
-                    <div className="flex gap-3 text-xs">
+                  <div className="flex flex-wrap gap-3 text-xs">
+                    {isCommentOwner(comment) ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingCommentId(comment.id)
+                            setEditingCommentText(comment.content || '')
+                          }}
+                          className={colors.accent}
+                        >
+                          Edit
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteComment(comment.id)}
+                          className="text-red-500"
+                        >
+                          Delete
+                        </button>
+                      </>
+                    ) : currentUser ? (
                       <button
                         type="button"
                         onClick={() => {
-                          setEditingCommentId(comment.id)
-                          setEditingCommentText(comment.content || '')
+                          setReportingCommentId(comment.id)
+                          setCommentReportReason('')
+                          setCommentReportDetails('')
+                          setShowCommentReportModal(true)
                         }}
-                        className={colors.accent}
+                        className="text-red-400 hover:text-red-500"
                       >
-                        Edit
+                        ⚑ Report
                       </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteComment(comment.id)}
-                        className="text-red-500"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  )}
+                    ) : null}
+                  </div>
                 </div>
 
                 {editingCommentId === comment.id ? (
@@ -860,6 +920,82 @@ export default function Reader() {
           )}
         </div>
       </section>
+
+      {/* Comment report modal */}
+      {showCommentReportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className={`w-full max-w-md rounded-2xl border p-6 shadow-2xl ${colors.card}`}>
+            <h2 className={`mb-2 text-xl font-bold ${colors.heading}`}>
+              Report Comment
+            </h2>
+
+            <p className={`mb-5 text-sm ${colors.muted}`}>
+              Why are you reporting this comment?
+            </p>
+
+            <form onSubmit={handleCommentReportSubmit}>
+              <label className={`mb-2 block text-sm font-semibold ${colors.heading}`}>
+                Report reason
+              </label>
+
+              <select
+                value={commentReportReason}
+                onChange={(event) => setCommentReportReason(event.target.value)}
+                required
+                className={`mb-4 w-full rounded-xl border p-3 outline-none ${
+                  isDark
+                    ? 'border-[#493565] bg-[#10091F] text-white'
+                    : 'border-[#D9C8B8] bg-white text-gray-800'
+                }`}
+              >
+                <option value="">Select a reason</option>
+                <option value="Harassment or bullying">Harassment or bullying</option>
+                <option value="Hate speech">Hate speech</option>
+                <option value="Spam">Spam</option>
+                <option value="Inappropriate content">Inappropriate content</option>
+                <option value="Threats or violence">Threats or violence</option>
+                <option value="Other">Other</option>
+              </select>
+
+              <label className={`mb-2 block text-sm font-semibold ${colors.heading}`}>
+                Additional details (optional)
+              </label>
+
+              <textarea
+                value={commentReportDetails}
+                onChange={(event) => setCommentReportDetails(event.target.value)}
+                rows={4}
+                maxLength={2000}
+                placeholder="Explain why this comment should be reviewed..."
+                className={`mb-5 w-full resize-none rounded-xl border p-3 outline-none ${
+                  isDark
+                    ? 'border-[#493565] bg-[#10091F] text-white placeholder:text-gray-400'
+                    : 'border-[#D9C8B8] bg-white text-gray-800 placeholder:text-gray-400'
+                }`}
+              />
+
+              <div className="flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowCommentReportModal(false)}
+                  disabled={commentReportLoading}
+                  className={`rounded-xl border px-4 py-2 font-semibold ${colors.secondaryButton}`}
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={!commentReportReason || commentReportLoading}
+                  className="rounded-xl bg-violet-600 px-5 py-2 font-semibold text-white disabled:opacity-50"
+                >
+                  {commentReportLoading ? 'Submitting...' : 'Submit Report'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

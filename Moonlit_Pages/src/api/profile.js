@@ -39,3 +39,33 @@ export const searchUsers = async (query) => {
 
   return response.data
 }
+
+// Report a user profile
+export const reportUser = async (userId, reportData) => {
+  const response = await api.post(`/users/${userId}/report`, {
+    reason: reportData.reason,
+    details: reportData.details || '',
+  })
+
+  return response.data
+}
+
+// Report a story
+export const reportStory = async (storyId, reportData) => {
+  const response = await api.post(`/stories/${storyId}/report`, {
+    reason: reportData.reason,
+    details: reportData.details || '',
+  })
+
+  return response.data
+}
+
+// Report a comment
+export const reportComment = async (commentId, reportData) => {
+  const response = await api.post(`/comments/${commentId}/report`, {
+    reason: reportData.reason,
+    details: reportData.details || '',
+  })
+
+  return response.data
+}

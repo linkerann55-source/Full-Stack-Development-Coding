@@ -1,4 +1,3 @@
-
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import api from '../api/axios'
@@ -167,14 +166,6 @@ export default function Login() {
             />
 
 
-          </div>
-          <div className="flex justify-end -mt-2">
-            <Link
-              to="/forgot-password"
-              className={`text-xs font-semibold transition ${colors.link}`}
-            >
-              Forgot Password?
-            </Link>
           </div>
           
 

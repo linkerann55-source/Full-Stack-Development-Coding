@@ -67,6 +67,8 @@ export default function Register() {
         JSON.stringify(response.data.user)
       )
 
+      window.dispatchEvent(new Event('moonlit-auth-updated'))
+
       navigate('/')
     } catch (err) {
       const errors = err.response?.data?.errors
